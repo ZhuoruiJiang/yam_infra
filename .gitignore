@@ -4,6 +4,8 @@ __pycache__/
 .uv/
 .ruff_cache/
 *.egg-info/
+build/
+.packaging-check/
 cache/
 uv.lock
 checkpoints/
