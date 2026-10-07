@@ -5,6 +5,8 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from deploy.robot.leaders.yam_leader_config import YamLeaderConfig
+
 
 @dataclass
 class CameraConfig:
@@ -33,7 +35,7 @@ class FollowerConfig:
 
 @dataclass
 class RobotConfig:
-    leader: LeaderConfig
+    leader: LeaderConfig | YamLeaderConfig
     follower: FollowerConfig
     root_pos: list[float]
     root_ori: list[float]
@@ -156,6 +158,31 @@ _CBOX_CAN = (
 
 
 PROFILES = {
+    "yam_infra": RobotSystemConfig(
+        cameras={
+            "left": CameraConfig(serial="335122272315", socket="left_rgb"),
+            "right": CameraConfig(serial="335122271110", socket="right_rgb"),
+            "top": CameraConfig(serial="335122270857", socket="top_rgb"),
+        },
+        robots={
+            side: RobotConfig(
+                leader=YamLeaderConfig(name=f"leader_{side}", channel=f"can_leader_{suffix}"),
+                follower=FollowerConfig(channel=f"can_follower_{suffix}", gripper_type="linear_4310"),
+                # Placeholder geometry/start pose from the existing defaults;
+                # teleop does not use these. Measure before policy rollout.
+                root_pos=[0.0, 0.3 if side == "left" else -0.3, 0.0],
+                root_ori=[1.0, 0.0, 0.0, 0.0],
+                init_q=_DEFAULT_INIT_Q[side].copy(),
+            )
+            for side, suffix in (("left", "l"), ("right", "r"))
+        },
+        can_devices=CanDevicesConfig(
+            can_l_lead="001D0054594E501820313332",
+            can_l_foll="00540051594E501820313332",
+            can_r_lead="003F0053594E501820313332",
+            can_r_foll="00560056594E501820313332",
+        ),
+    ),
     "bbox_config": _profile(
         camera_serials=("335122272485", "352122272888", "218622274707"),
         leader_devices=("/dev/ttyUSB0", "/dev/ttyUSB1"),

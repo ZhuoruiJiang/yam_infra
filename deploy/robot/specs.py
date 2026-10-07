@@ -1,8 +1,11 @@
 """Translate a robot profile into launchable camera and arm nodes."""
 
+from dataclasses import replace
+
 from deploy.robot.cameras.config import CameraNodeConfig
 from deploy.robot.followers.yam_follower_config import YamFollowerConfig
 from deploy.robot.launch import ProcessSpec
+from deploy.robot.leaders.yam_leader_config import YamLeaderConfig
 
 
 def camera_specs(profile) -> list[ProcessSpec]:
@@ -52,6 +55,16 @@ def teleop_specs(profile, *, quiet: bool) -> list[ProcessSpec]:
     specs = []
     for name, robot in profile.robots.items():
         leader = robot.leader
+        if isinstance(leader, YamLeaderConfig):
+            specs.extend([
+                ProcessSpec(
+                    f"leader_{name}", "deploy.robot.leaders.yam_leader",
+                    {"cfg": replace(leader, name=f"leader_{name}", publish_actions=True)},
+                    quiet=quiet,
+                ),
+                _follower_spec(name, robot.follower, quiet=quiet),
+            ])
+            continue
         specs.extend(
             [
                 ProcessSpec(

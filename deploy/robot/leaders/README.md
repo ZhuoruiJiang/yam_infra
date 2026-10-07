@@ -47,10 +47,36 @@ follower command format. A running follower subscribed to that topic will
 move. Buttons are included in metadata but do not enable/disable following
 in the existing ABC follower. Validate diagnostics before enabling commands.
 
-The paired teleop launcher still uses the original GELLO profiles. YAM
-profile integration awaits confirmation of the follower gripper variant.
-The follower module is unchanged.
+## Paired teleop
 
-Implementation targets i2rt commit
-`852f6fff33970fe9b882c53e6b28c66172c97291`, pinned in `pyproject.toml`.
-Live testing is required if the workstation uses another driver version.
+The `yam_infra` robot profile uses the CAN mapping above, YAM teaching
+handles, and confirmed `linear_4310` follower grippers. It also stores the
+three known D405 camera serials; teleop starts only the selected arm pair.
+
+Stop standalone leader diagnostics first so two processes do not share
+the same CAN bus. Check that the selected leader and follower CAN buses
+are up at 1 Mbit/s. Start with the left pair:
+
+```bash
+python -m deploy.robot.scripts.run_teleop --profile yam_infra --side left --verbose
+```
+
+This command moves hardware: the follower gripper calibrates during driver
+initialization, then the follower interpolates to the leader's first pose
+over approximately two seconds. Start with both arms in nearby poses and
+keep the movement path clear. Check small joint movements and trigger
+open/close before expanding to the right pair with `--side right`.
+
+The existing follower attempts to return its joints to zero on Ctrl+C,
+then closes the driver. Its shutdown is not a stationary hold. The leader
+loses gravity compensation on exit and should be supported. Handle buttons
+remain diagnostic metadata; they do not pause the follower.
+
+The follower module is unchanged. Profile base geometry and rollout
+starting poses are placeholders from ABC defaults; measure those before
+policy rollout. This profile is selected explicitly, leaving existing
+GELLO station defaults available.
+
+The leader was implemented against ABC's pinned i2rt API and its diagnostic
+readings were subsequently verified on both workstation leaders using the
+copied driver. Paired follower motion still requires live verification.
