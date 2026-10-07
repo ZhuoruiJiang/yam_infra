@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.uv/
+.ruff_cache/
+*.egg-info/
+cache/
+uv.lock
+checkpoints/
+outputs/
+abc_sim/models/assets/
+abc_sim/models/assets_robocasa/
+MUJOCO_LOG.TXT
+wandb/
+# Robot recordings, review videos, and exports (deploy/).
+data/
+.python-version
