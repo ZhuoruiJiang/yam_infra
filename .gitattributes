@@ -1,0 +1,15 @@
+# Keep text files consistent across Windows development and Linux deployment.
+* text=auto eol=lf
+
+# Windows command scripts use native line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Preserve binary assets byte-for-byte.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.stl binary
+*.spiece.model binary
