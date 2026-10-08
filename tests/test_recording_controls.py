@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+import tempfile
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -38,6 +39,44 @@ recorder_module = load_file("tested_recorder", "deploy/robot/recorders/recorder.
 
 
 class RecordingControlsTests(unittest.TestCase):
+    def test_discard_retains_data_and_marks_unusable(self):
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest("h5py required for archive round-trip")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "episode.h5"
+            with h5py.File(source, "w") as f:
+                f.create_dataset("data/q_left", data=np.arange(12).reshape(2, 6))
+                f.create_dataset("stages/index", data=[1, 2])
+            node = recorder_module.RecorderNode.__new__(recorder_module.RecorderNode)
+            node.data_root_directory = directory
+            node.current_file_name = str(source)
+            node._archive_discarded()
+            destination = Path(directory) / "discarded/episode-discarded.h5"
+            self.assertFalse(source.exists())
+            self.assertEqual(Path(node.current_file_name), destination)
+            with h5py.File(destination, "r") as f:
+                self.assertFalse(f.attrs["usable"])
+                self.assertTrue(f.attrs["discarded"])
+                np.testing.assert_array_equal(f["data/q_left"][:], np.arange(12).reshape(2, 6))
+                np.testing.assert_array_equal(f["stages/index"][:], [1, 2])
+
+    def test_writer_timeout_does_not_archive_or_report_save(self):
+        node = recorder_module.RecorderNode.__new__(recorder_module.RecorderNode)
+        node._recording_duration_seconds = Mock(return_value=1)
+        node._close_final_stage = Mock()
+        node._stage_records = []
+        node.writer_thread = Mock()
+        node.writer_thread.is_alive.return_value = True
+        node._stop_writer = Mock(return_value=False)
+        node._archive_discarded = Mock()
+        node._spawn_post_video = Mock()
+        with self.assertRaises(RuntimeError):
+            node._stop_recording(discard=True)
+        node._archive_discarded.assert_not_called()
+        node._spawn_post_video.assert_not_called()
+
     def test_white_button_edges_hold_and_startup(self):
         node = key_module.KeyListenerNode("KeyListener", 60, left_white_topic="left", right_white_topic="right")
         for topic, key in (("left", "d"), ("right", "s")):

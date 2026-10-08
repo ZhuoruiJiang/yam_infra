@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -138,22 +139,43 @@ class RecorderNode(RecorderBase):
         self._stage_index = 0
 
         if self.writer_thread and self.writer_thread.is_alive():
-            if not discard and stage_records:
+            if stage_records:
                 self.worker_queue.put(("stages", stage_records, None))
-            self._stop_writer(timeout=10)
+            if not self._stop_writer(timeout=30):
+                raise RuntimeError("HDF5 writer did not stop; recording left at its original path")
 
         if discard:
-            print(f"\nRECORDING DISCARDED - Deleting: {self.current_file_name}")
-            try:
-                os.remove(self.current_file_name)
-            except OSError as e:
-                print(f"  Warning: could not delete file: {e}")
+            self._archive_discarded()
+            print(f"\nRECORDING DISCARDED - File retained: {self.current_file_name}")
+            self._spawn_post_video()
         else:
             self._session_saved_seconds += recording_duration_s
             self._session_saved_count += 1
             print(f"\nRECORDING STOPPED - File saved: {self.current_file_name}")
             self._print_session_total()
             self._spawn_post_video()
+
+    def _write_extra_attrs(self, f) -> None:
+        f.attrs["usable"] = True
+        f.attrs["unusable"] = False
+        f.attrs["discarded"] = False
+
+    def _archive_discarded(self) -> None:
+        import h5py
+
+        source = Path(self.current_file_name)
+        destination_dir = Path(self.data_root_directory) / "discarded"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / f"{source.stem}-discarded{source.suffix}"
+        if destination.exists():
+            raise FileExistsError(f"Refusing to overwrite discarded recording: {destination}")
+        with h5py.File(source, "r+") as f:
+            f.attrs["usable"] = False
+            f.attrs["unusable"] = True
+            f.attrs["discarded"] = True
+            f.attrs["discard_reason"] = "operator_discard"
+        source.rename(destination)
+        self.current_file_name = str(destination)
 
     def _handle_queue_item(self, f, data_group, timestamps_group, data) -> bool:
         if data[0] != "stages":

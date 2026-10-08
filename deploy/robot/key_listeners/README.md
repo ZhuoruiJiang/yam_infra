@@ -10,6 +10,13 @@ Old teleop keys b/c/x/j are no longer recorder commands. Ctrl+C retains
 the existing behavior: finish/save an active recording and shut down.
 Keyboard input retains the existing one-second cooldown.
 
+Discarded episodes are retained in `<data_root_directory>/discarded/`
+(normally `data/teleop_h5/discarded/`) with `-discarded.h5` at the end of
+their names. Their HDF5 attributes mark `usable=False`, `unusable=True`,
+and `discarded=True`. Stages and sensor streams are preserved. Discarded
+episodes do not count toward session saved totals. Review MP4 generation
+uses the existing post-video hook unless `DEPLOY_POST_VIDEO=0` is set.
+
 YAM white is handle index 1. The leader publishes a one-value uint8 state
 on `<leader_name>_white_button` independently of action publishing. Yellow
 (index 0) is not read for recording. The listener subscribes without
