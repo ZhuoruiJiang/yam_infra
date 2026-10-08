@@ -81,9 +81,9 @@ class YAMLeaderNode(Node):
         now = time.monotonic()
         if self.cfg.print_state and now - self._last_print >= 0.5:
             self._last_print = now
-            print(f"[{self._name}] q={np.round(command[:6], 3).tolist()} "
-                  f"trigger={extras['trigger']:.3f} gripper={command[6]:.3f} "
-                  f"buttons={extras['buttons']}")
+            # print(f"[{self._name}] q={np.round(command[:6], 3).tolist()} "
+            #       f"trigger={extras['trigger']:.3f} gripper={command[6]:.3f} "
+            #       f"buttons={extras['buttons']}")
 
     def on_shutdown(self) -> None:
         if self.robot is not None:
