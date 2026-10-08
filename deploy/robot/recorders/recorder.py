@@ -46,7 +46,7 @@ class RecorderNode(RecorderBase):
         if os.environ.get("DEPLOY_VERBOSE"):
             print(f"[{self._name}] Recorder node initial bootup complete.")
         print(
-            "Recorder started. Pedals: any=start, left(a)=discard, mid(b)=next stage, right(c)=save. Ctrl+C to quit."
+            "Recorder started. Space/s/right white=start or save; d/left white=discard; a=next stage. Ctrl+C saves the active recording and quits."
         )
         print("Listening... (not recording)")
 
@@ -67,18 +67,15 @@ class RecorderNode(RecorderBase):
 
         key_pressed = self._key_press(message)
         if key_pressed is not None:
-            if key_pressed in [" ", "a", "b", "c", "x", "j"]:
+            if key_pressed in (" ", "s"):
                 if not self.record_data:
                     self._start_recording()
-                elif key_pressed == "a":
-                    # Left pedal while recording → discard
-                    self._stop_recording(discard=True)
-                elif key_pressed in ("b", "x"):
-                    # Middle pedal while recording → end stage, start next
-                    self._advance_stage()
                 else:
-                    # Right pedal or space while recording → save
                     self._stop_recording(discard=False)
+            elif self.record_data and key_pressed == "d":
+                self._stop_recording(discard=True)
+            elif self.record_data and key_pressed == "a":
+                self._advance_stage()
 
         self._poll_sensor_topics()
 

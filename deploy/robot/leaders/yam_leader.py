@@ -22,6 +22,8 @@ class YAMLeaderNode(Node):
         self.cfg = cfg
         self.robot = None
         self.leader_topic_name = f"{cfg.name}_actions"
+        self.white_button_topic = f"{cfg.name}_white_button"
+        self.create_publisher(self.white_button_topic)
         self._last_print = 0.0
         if cfg.publish_actions:
             self.create_publisher(self.leader_topic_name)
@@ -71,6 +73,9 @@ class YAMLeaderNode(Node):
 
     def tick(self) -> None:
         command, extras = self.read_command()
+        # Publish only white (index 1); yellow has no recording role.
+        self.publish(self.white_button_topic,
+                     np.array([extras["buttons"][1]], dtype=np.uint8))
         if self.cfg.publish_actions:
             self.publish(self.leader_topic_name, command, extras)
         now = time.monotonic()

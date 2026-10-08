@@ -62,13 +62,15 @@ class YAMLeaderTests(unittest.TestCase):
     def test_diagnostics_do_not_publish(self):
         node = self.make_node()
         node.tick()
-        node.create_publisher.assert_not_called()
-        node.publish.assert_not_called()
+        node.create_publisher.assert_called_once_with("leader_left_white_button")
+        node.publish.assert_called_once()
+        self.assertEqual(node.publish.call_args.args[0], "leader_left_white_button")
+        self.assertEqual(int(node.publish.call_args.args[1][0]), 0)
 
     def test_follower_topic_contract(self):
         node = self.make_node(name="leader_right", publish_actions=True)
         node.tick()
-        node.create_publisher.assert_called_once_with("leader_right_actions")
+        self.assertEqual(node.create_publisher.call_count, 2)
         self.assertEqual(node.publish.call_args.args[0], "leader_right_actions")
         self.assertEqual(node.publish.call_args.args[1].shape, (7,))
 

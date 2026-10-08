@@ -9,6 +9,7 @@ from deploy.robot.key_listeners.key_listener_config import KeyListenerConfig
 from deploy.robot.key_listeners.pedal import resolve_foot_pedal_device
 from deploy.robot.launch import ProcessSpec
 from deploy.robot.specs import camera_specs, teleop_specs
+from deploy.robot.leaders.yam_leader_config import YamLeaderConfig
 from deploy.robot.tasks import (
     get_data_dir,
     prompt_session_tag,
@@ -77,6 +78,9 @@ def main() -> None:
                 "cfg": KeyListenerConfig(
                     name="KeyListener",
                     control_rate=60,
+                    left_white_topic=("leader_left_white_button" if "left" in config.robots and isinstance(config.robots["left"].leader, YamLeaderConfig) else ""),
+                    right_white_topic=("leader_right_white_button" if "right" in config.robots and isinstance(config.robots["right"].leader, YamLeaderConfig) else ""),
+                    input_keys="s,d,a,KEY_SPACE",
                     input_device=resolve_foot_pedal_device(
                         args.foot_pedal_device, tool="record"
                     ),

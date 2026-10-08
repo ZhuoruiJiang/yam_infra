@@ -40,6 +40,8 @@ class KeyListenerNode(Node):
         input_device: str = "",
         input_keys: str = "a,b,c",
         grab_device: bool = True,
+        left_white_topic: str = "",
+        right_white_topic: str = "",
     ):
         super().__init__(name, control_rate, verbose=False)
 
@@ -57,6 +59,30 @@ class KeyListenerNode(Node):
         self._input_device = None
         self._debouncer = KeyDebouncer()
         self.create_publisher(self.leader_topic_name)
+        self._white_topics = {topic: key for topic, key in
+                              ((left_white_topic, "d"), (right_white_topic, "s")) if topic}
+        self._white_previous = {}
+        self._white_debouncer = KeyDebouncer()
+        for topic in self._white_topics:
+            # Preserve transitions rather than conflating press and release.
+            self.create_subscriber(topic)
+
+    def _poll_white_buttons(self) -> None:
+        for topic, key in self._white_topics.items():
+            for _ in range(128):
+                payload, _ = self.subscribe(topic, block=False)
+                if payload is None:
+                    break
+                pressed = bool(payload[0])
+                previous = self._white_previous.get(topic)
+                self._white_previous[topic] = pressed
+                # Establish the initial state without treating a held button
+                # at startup as a new press.
+                if previous is False and pressed and self._white_debouncer.accept(topic, time.perf_counter()):
+                    self.publish(self.leader_topic_name, np.array([1], dtype=np.uint8),
+                                 extras={"key": key, "pressed": True, "source": topic})
+                    if os.environ.get("DEPLOY_VERBOSE"):
+                        print(f"[{self._name}] {topic}: key={key!r}")
 
     @staticmethod
     def _normalize_key_name(key: str) -> str:
@@ -155,6 +181,7 @@ class KeyListenerNode(Node):
             )
 
     def tick(self) -> None:
+        self._poll_white_buttons()
         self._poll_input_device()
         if not self._stdin_available:
             return
@@ -195,6 +222,8 @@ def run(cfg: KeyListenerConfig) -> None:
         input_device=cfg.input_device,
         input_keys=cfg.input_keys,
         grab_device=cfg.grab_device,
+        left_white_topic=cfg.left_white_topic,
+        right_white_topic=cfg.right_white_topic,
     ).run()
 
 

@@ -13,4 +13,6 @@ class KeyListenerConfig:
     """Comma/space-separated keys to forward, e.g. 'a,b,c' or 'KEY_A KEY_B'.
     Overridable via FOOT_PEDAL_INPUT_KEY."""
     grab_device: bool = True
+    left_white_topic: str = ""
+    right_white_topic: str = ""
     """Exclusively grab the evdev device so pedal events do not type into apps."""
