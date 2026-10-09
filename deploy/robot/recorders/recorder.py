@@ -10,6 +10,7 @@ from deploy.robot.recorders.base import RecorderBase
 
 
 class RecorderNode(RecorderBase):
+    record_depth = True
     def __init__(
         self,
         name: str,
@@ -64,6 +65,8 @@ class RecorderNode(RecorderBase):
         )
 
     def tick(self) -> None:
+        if getattr(self, "_writer_error", None) is not None:
+            raise RuntimeError("HDF5 writer failed; stopping collection") from self._writer_error
         message = self.subscribe(self.key_press_topic, block=False)
 
         key_pressed = self._key_press(message)

@@ -24,9 +24,11 @@ class RecorderBase(Node):
     def __init__(self, name: str, control_rate: float, **node_kwargs):
         super().__init__(name, control_rate, **node_kwargs)
         self._camera_last_seen: dict[str, float] = {}
+        self._depth_last_seen: dict[str, float] = {}
         self._camera_timeout = 2.0
         self.worker_queue = queue.Queue(maxsize=512)
         self.writer_thread: threading.Thread | None = None
+        self._writer_error = None
         self.record_data = False
         self.recording_id = None
         self.current_file_name = None
@@ -45,6 +47,10 @@ class RecorderBase(Node):
         self.sensor_topics.update(
             {f"follower_{name}_obs": ("follower", name) for name in self.config.robots}
         )
+        if getattr(self, "record_depth", False):
+            self.sensor_topics.update({f"{name}_depth": ("depth", name)
+                for name in self.camera_names
+                if self.config.cameras[name].camera_type == "realsense"})
 
         self.create_subscriber(self.key_press_topic)
         for topic in self.sensor_topics:
@@ -59,8 +65,13 @@ class RecorderBase(Node):
             timestamp = message[1]["timestamp"] * 1e9
             if data_type == "rgb":
                 self._camera_last_seen[name] = time.monotonic()
+            elif data_type == "depth":
+                self._depth_last_seen[name] = time.monotonic()
             if self.record_data:
-                self.worker_queue.put((data_type, name, message[0], timestamp))
+                item = (data_type, name, message[0], timestamp)
+                if getattr(self, "record_depth", False) and data_type in ("rgb", "depth"):
+                    item += (message[1],)
+                self.worker_queue.put(item, timeout=1)
             else:
                 self._handle_unrecorded_sensor_item(
                     data_type, name, message[0], timestamp
@@ -137,7 +148,7 @@ class RecorderBase(Node):
                 if self._handle_queue_item(f, data_group, timestamps_group, data):
                     pass
                 elif data[0] == "rgb":
-                    _, name, image, timestamp = data
+                    _, name, image, timestamp = data[:4]
                     # Camera publishes RGB; cv2.imencode expects BGR
                     image_bgr = image[:, :, ::-1]
                     _, jpeg = cv2.imencode(
@@ -152,6 +163,13 @@ class RecorderBase(Node):
                         timestamp,
                         h5py.vlen_dtype(np.uint8),
                     )
+                    if len(data) > 4:
+                        from deploy.robot.recorders.depth import append_camera_metadata
+                        append_camera_metadata(f, name, "rgb", data[4])
+                elif data[0] == "depth":
+                    from deploy.robot.recorders.depth import append_depth
+                    _, name, image, timestamp, metadata = data
+                    append_depth(f, name, image, timestamp, metadata)
                 else:
                     # Layout from yam_follower: joint_pos(6) + gripper_pos(1)
                     # + joint_vel(7) + joint_eff(7) + command(7) = 28
@@ -201,7 +219,15 @@ class RecorderBase(Node):
                 break
         for item in buffered_items:
             self.worker_queue.put(item)
-        self.writer_thread = threading.Thread(target=self._write_data, daemon=False)
+        self._writer_error = None
+        def write_checked():
+            try:
+                self._write_data()
+            except Exception as error:
+                self._writer_error = error
+                import traceback
+                traceback.print_exc()
+        self.writer_thread = threading.Thread(target=write_checked, daemon=False)
         self.writer_thread.start()
 
     @staticmethod
@@ -227,10 +253,14 @@ class RecorderBase(Node):
         spawn_detached(self.current_file_name)
 
     def _stop_writer(self, timeout: float) -> bool:
+        if self._writer_error is not None:
+            raise RuntimeError("HDF5 writer failed; file may be incomplete") from self._writer_error
         if not self.writer_thread or not self.writer_thread.is_alive():
             return True
         self.worker_queue.put(("shutdown", None, None))
         self.writer_thread.join(timeout=timeout)
+        if self._writer_error is not None:
+            raise RuntimeError("HDF5 writer failed; file may be incomplete") from self._writer_error
         return not self.writer_thread.is_alive()
 
     def _get_cameras_alive(self) -> set[str]:
@@ -246,6 +276,11 @@ class RecorderBase(Node):
         """Refuse to start a recording until every camera is live."""
         cameras_alive = self._get_cameras_alive()
         dead_cameras = set(self.camera_names) - cameras_alive
+        if getattr(self, "record_depth", False):
+            now = time.monotonic()
+            dead_cameras.update(f"{name}_depth" for name in self.camera_names
+                if self.config.cameras[name].camera_type == "realsense"
+                and now - self._depth_last_seen.get(name, float("-inf")) >= self._camera_timeout)
         if not dead_cameras:
             return True
         print(

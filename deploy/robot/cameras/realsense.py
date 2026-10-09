@@ -81,6 +81,9 @@ class RealsenseNode(Node):
             self._pipeline_started = True
             if self.enable_depth:
                 self.depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
+                extrinsics = profile.get_stream(rs.stream.depth).get_extrinsics_to(profile.get_stream(rs.stream.color))
+                self.depth_to_color = {"rotation": list(extrinsics.rotation),
+                                       "translation_m": list(extrinsics.translation)}
             print(f"[{self._name}] Camera {self.camera_serial}: RGB"
                   f"{' + depth' if self.enable_depth else ''}, "
                   f"{self.width}x{self.height} at {self._control_rate:g} Hz")
@@ -106,7 +109,12 @@ class RealsenseNode(Node):
         # Both messages carry the same frameset identifier for pairing.
         pair_id = frames.get_frame_number()
         def metadata(frame):
+            intrinsics = frame.profile.as_video_stream_profile().get_intrinsics()
             return {
+                "intrinsics": {"width": intrinsics.width, "height": intrinsics.height,
+                    "fx": intrinsics.fx, "fy": intrinsics.fy, "ppx": intrinsics.ppx,
+                    "ppy": intrinsics.ppy, "model": str(intrinsics.model),
+                    "coeffs": list(intrinsics.coeffs)},
                 "camera_serial": self.camera_serial,
                 "frameset_number": pair_id,
                 "frame_number": frame.get_frame_number(),
@@ -119,6 +127,7 @@ class RealsenseNode(Node):
             depth_image = np.asanyarray(depth_frame.get_data())
             self.publish(self.depth_topic_name, depth_image, {
                 **metadata(depth_frame), "depth_scale_m": self.depth_scale,
+                "depth_to_color": self.depth_to_color,
             })
         if self.preview:
             import cv2
