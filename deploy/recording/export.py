@@ -35,6 +35,7 @@ import glob
 import json
 import os
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -63,6 +64,9 @@ class ExportConfig:
     task_name: str = ""
     """Prompt assigned to exported episodes. Default: the H5 task_name attr."""
 
+    scene_task: str | None = None
+    """Optional simulation scene for playback (use empty for real YAM recordings)."""
+
     modified_after: str | None = None
     """Only include files modified after this local time, e.g. '2026-08-11 14:30'."""
 
@@ -89,6 +93,9 @@ class ExportConfig:
 
     cameras: tuple[str, ...] = rio.CAMERA_KEYS
     """Camera stack order in the combined mp4."""
+
+    export_depth: bool = True
+    """Preserve available native depth streams in a lossless depth.h5 sidecar."""
 
     val_mode: Literal["same_as_train", "split"] = "same_as_train"
     """same_as_train symlinks val/ to train/ (overfit-friendly); split moves episodes."""
@@ -322,6 +329,40 @@ def write_episode(
         "fps": cfg.output_fps,
         **provenance,
     }
+    if cfg.scene_task:
+        metadata["task"] = cfg.scene_task
+    if cfg.export_depth:
+        depth_cameras = [cam for cam in cfg.cameras if f"depth_{cam}" in f["data"]]
+        if depth_cameras:
+            with h5py.File(episode_dir / "depth.h5", "w") as depth_file:
+                timeline = synced.base_ts_ns[start:end]
+                depth_file.create_dataset("timeline_ns", data=timeline)
+                depth_file.attrs["camera_order"] = json.dumps(depth_cameras)
+                depth_file.attrs["sync_method"] = "latest depth timestamp at or before RGB timeline; no sample marked invalid"
+                for cam in depth_cameras:
+                    key = f"depth_{cam}"
+                    source = f["data"][key]
+                    if source.dtype != np.uint16 or source.ndim != 3:
+                        raise ValueError(f"{key}: expected uint16 (N,H,W)")
+                    scale = float(source.attrs.get("depth_scale_m", 0))
+                    if not np.isfinite(scale) or scale <= 0:
+                        raise ValueError(f"{key}: invalid depth_scale_m")
+                    ts = rio.stream_timestamps(f, key)
+                    indices = np.searchsorted(ts, timeline, side="right") - 1
+                    group = depth_file.create_group(cam)
+                    frames = group.create_dataset("frames", shape=(n_frames, *source.shape[1:]), dtype="uint16", chunks=(1, *source.shape[1:]), compression="gzip", compression_opts=1, shuffle=True)
+                    for attr, value in source.attrs.items():
+                        frames.attrs[attr] = value
+                    group.create_dataset("source_indices", data=indices)
+                    group.create_dataset("valid", data=indices >= 0)
+                    group.create_dataset("timestamps_ns", data=[ts[i] if i >= 0 else 0 for i in indices], dtype="uint64")
+                    for tick, index in enumerate(indices):
+                        frames[tick] = source[int(index)] if index >= 0 else np.zeros(source.shape[1:], dtype=np.uint16)
+                    source_metadata = f.get(f"camera_metadata/{cam}/depth")
+                    if source_metadata is not None:
+                        f.copy(source_metadata, group, name="source_camera_metadata")
+            metadata["depth_file"] = "depth.h5"
+            metadata["depth_cameras"] = depth_cameras
     (episode_dir / "episode_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n"
     )
@@ -348,12 +389,28 @@ def _segment_ranges(
     return rio.true_ranges(mask), valid_ranges
 
 
+def _remove_export_directory(root: Path) -> None:
+    """Handle read-only Windows/OneDrive entries without hiding other errors."""
+    def retry_readonly(function, path, exc_info):
+        if os.name != "nt" or not isinstance(exc_info[1], PermissionError):
+            raise exc_info[1]
+        if os.stat(path, follow_symlinks=False).st_mode & stat.S_IWRITE:
+            raise PermissionError(
+                f"Cannot overwrite {path}. Close any viewer using this export "
+                "and retry, or choose a new --output-dir."
+            ) from exc_info[1]
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        function(path)
+
+    shutil.rmtree(root, onerror=retry_readonly)
+
+
 def export_recordings(cfg: ExportConfig) -> dict:
     output_root = Path(cfg.output_dir).expanduser().resolve()
     if output_root.exists():
         if not cfg.overwrite:
             raise FileExistsError(f"{output_root} exists; pass --overwrite to replace")
-        shutil.rmtree(output_root)
+        _remove_export_directory(output_root)
     train_dir = output_root / "train"
     train_dir.mkdir(parents=True)
 

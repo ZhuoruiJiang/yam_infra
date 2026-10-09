@@ -216,6 +216,7 @@ def run_episode_viewer(cfg: VizEpisodeConfig) -> None:
     )
     view_btn = server.gui.add_button("Default view", order=_O_VIEW)
     video_image = None  # created on first decoded frame, sized to the video
+    depth_image = None
 
     # All mutation happens on the playback thread; GUI callbacks only enqueue.
     lock = threading.Lock()
@@ -283,6 +284,11 @@ def run_episode_viewer(cfg: VizEpisodeConfig) -> None:
         video_path = episode_dir / "combined_camera-images-rgb.mp4"
         if cfg.video_panel and video_path.exists():
             video = VideoFrames(video_path)
+        depth = None
+        depth_path = episode_dir / (metadata.get("depth_file") or "depth.h5")
+        if cfg.video_panel and depth_path.exists():
+            from abc_minimal.depth_io import DepthFrames
+            depth = DepthFrames(depth_path, len(states))
         # Each episode compiles a fresh MjModel, and a model may only be
         # wrapped by ViserMujocoScene once; scene.reset() keeps the GUI and
         # every client's camera.
@@ -306,6 +312,7 @@ def run_episode_viewer(cfg: VizEpisodeConfig) -> None:
             "actions": actions,
             "scene_qpos": scene_qpos,
             "video": video,
+            "depth": depth,
         }
 
     @view_btn.on_click
@@ -417,11 +424,17 @@ def run_episode_viewer(cfg: VizEpisodeConfig) -> None:
 
         def install(self, gen: int, episode_dir: Path, payload: dict) -> None:
             if gen != self.generation:
+                if payload["depth"] is not None:
+                    payload["depth"].close()
                 if payload["video"] is not None:
                     payload["video"].close()
                 return
             if self.video is not None:
                 self.video.close()
+            if getattr(self, "depth", None) is not None:
+                self.depth.close()
+            self.depth = payload["depth"]
+            self._depth_shown = -1
             self.env = payload["env"]
             self.scene = payload["scene"]
             self.states, self.actions = payload["states"], payload["actions"]
@@ -482,8 +495,20 @@ def run_episode_viewer(cfg: VizEpisodeConfig) -> None:
             self.push_updates()
 
         def push_updates(self) -> None:
-            nonlocal video_image
+            nonlocal video_image, depth_image
             self.scene.update_from_mjdata(self.env.data)
+            if getattr(self, "depth", None) is not None and self._depth_shown != self.frame:
+                pixels = self.depth.frame(self.frame)
+                label = "depth " + "/".join(self.depth.cameras) + " (0–1 m; missing black)"
+                if depth_image is None:
+                    depth_image = server.gui.add_image(pixels, label=label, format="png", order=_O_VIDEO + 1)
+                else:
+                    depth_image.image = pixels
+                    depth_image.label = label
+                depth_image.visible = True
+                self._depth_shown = self.frame
+            elif getattr(self, "depth", None) is None and depth_image is not None:
+                depth_image.visible = False
             if self.video is not None and self._video_shown != self.frame:
                 pixels = self.video.frame(self.frame)
                 if pixels is not None:
