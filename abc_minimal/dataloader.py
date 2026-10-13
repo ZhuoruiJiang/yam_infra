@@ -298,12 +298,18 @@ class EpisodeDataset(Dataset):
         prompt_config: PromptConfig | None = None,
         operator_label_maps=None,
         norm_preset="auto",
+        load_depth=False,
     ):
         self.episodes = scan_episodes(data_dir, default_task_name, model_config)
         if not self.episodes:
             raise ValueError(f"no episodes found in {data_dir}")
         self.model_config = model_config
         self.camera_keys = tuple(model_config.camera_keys)
+        self.depth_reader = None
+        if load_depth:
+            from abc_minimal.depth_dataset import EpisodeDepthReader
+
+            self.depth_reader = EpisodeDepthReader(self.camera_keys)
         self.norm_stats = norm_stats
         self.train = train
         self.mask_state_ratio = mask_state_ratio
@@ -357,13 +363,18 @@ class EpisodeDataset(Dataset):
             image_size=self.image_size,
         )
         prompt = self.build_prompt(ep_dir, k, task_name, prompt_timeline)
-        return {
+        sample = {
             "state": torch.from_numpy(state),
             "actions": torch.from_numpy(actions),
             "images": images,
             "state_is_masked": state_is_masked,
             "prompt": prompt,
         }
+        if self.depth_reader is not None:
+            depth, masks = self.depth_reader.read(ep_dir, k, length)
+            sample["depth"] = {cam: torch.from_numpy(v) for cam, v in depth.items()}
+            sample["depth_valid"] = {cam: torch.from_numpy(v) for cam, v in masks.items()}
+        return sample
 
     def build_prompt(self, ep_dir, frame_idx, task_name, prompt_timeline):
         """Compose the text prompt for one frame: the episode's prompt at that
@@ -456,7 +467,7 @@ class GlobalStepSampler(Sampler):
         return self.count
 
 def collate(samples, camera_keys):
-    return {
+    batch = {
         "state": torch.stack([s["state"] for s in samples]),
         "actions": torch.stack([s["actions"] for s in samples]),
         "images": {
@@ -465,6 +476,15 @@ def collate(samples, camera_keys):
         "state_is_masked": torch.tensor([s["state_is_masked"] for s in samples]),
         "prompt": [s["prompt"] for s in samples],
     }
+    has_depth = ["depth" in s for s in samples]
+    if any(has_depth):
+        if not all(has_depth):
+            raise ValueError("cannot mix depth-enabled and RGB-only samples in a batch")
+        for key in ("depth", "depth_valid"):
+            batch[key] = {
+                cam: torch.stack([s[key][cam] for s in samples]) for cam in camera_keys
+            }
+    return batch
 
 
 # --- loader construction -------------------------------------------------------
@@ -482,7 +502,8 @@ def build_train_loader(config, components, norm_stats, data_scope, resume_step,
                        model_config=model_config,
                        prompt_config=prompt_config,
                        operator_label_maps=operator_label_maps,
-                       norm_preset=norm_preset)
+                       norm_preset=norm_preset,
+                       load_depth=getattr(config, "load_depth", False))
         for c in components
     ]
     component_weights = [c.weight for c in components]
@@ -524,7 +545,8 @@ def build_val_loaders(config, components, norm_stats, data_scope, model_config,
                                    model_config=model_config,
                                    prompt_config=prompt_config,
                                    operator_label_maps=operator_label_maps,
-                                   norm_preset=norm_preset))
+                                   norm_preset=norm_preset,
+                                   load_depth=getattr(config, "load_depth", False)))
         for c in components
     ]
     val_loaders = {}

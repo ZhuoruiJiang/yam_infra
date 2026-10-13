@@ -156,6 +156,8 @@ class TrainConfig:
     seed: int = 123
     batch_size: int = 90
     num_workers: int = 16
+    load_depth: bool = False
+    """Load native per-camera depth and masks; requires depth in every episode."""
     train_steps: int = 75_000
 
     mixture_preset: Literal["bottles", "tshirt", "sim_task"] = "bottles"

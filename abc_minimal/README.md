@@ -86,6 +86,31 @@ episode_<uuid>/
 
 The mp4 is encoded in a manner that allows for efficient dataloading. For details, see the ABC paper.
 
+### Optional depth loading
+
+For local exports containing `depth.h5`, pass `--load-depth` to `train.py`
+or `load_depth=True` to `EpisodeDataset`. It defaults to off and applies to
+both train and validation loaders. Every sampled episode must contain depth
+for every configured camera; missing sidecars or cameras raise an error.
+Install `h5py` in the training environment to enable this optional feature.
+
+Samples add `depth` and `depth_valid` camera dictionaries. Depth is float32
+meters with shape `(1, H, W)`; validity is a boolean pixel mask of the same
+shape, combining the sidecar's frame validity and nonzero sensor pixels.
+Invalid pixels are zeroed. Batches have shape `(B, 1, H, W)` per camera,
+so each camera's resolution must be consistent across a batch. Depth remains
+at native resolution in native camera coordinates, without RGB augmentation,
+normalization, or spatial alignment. Depth and RGB use the same exported
+timeline index, which reflects the exporter's timestamp-based synchronization.
+
+Each dataset caches at most four open sidecars per worker, retaining dataset
+handles for chunk-cache reuse. Handles are opened lazily within each process
+and are excluded from worker serialization. Raw recordings are not modified.
+
+This flag exposes depth in loader batches only. The existing training loop
+and ABC policies still consume their existing RGB/state inputs; a model input
+extension is required to train a policy that uses depth.
+
 ## Multi-node training
 
 For multi-node jobs without a shared filesystem, predownload a deterministic
