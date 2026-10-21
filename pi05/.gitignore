@@ -1,0 +1,5 @@
+assets/
+checkpoints/
+smoke_assets/
+smoke_checkpoints/
+__pycache__/

@@ -248,6 +248,7 @@ def decode_frame(ep_dir, idx, episode_length, source_cameras, camera_keys):
     deterministically alias one top eye to `top`, matching production export.
     """
     import hashlib
+    import inspect
 
     from torchcodec.decoders import VideoDecoder
 
@@ -258,7 +259,9 @@ def decode_frame(ep_dir, idx, episode_length, source_cameras, camera_keys):
         keyframes = frozenset(n - 1 for n in sync) if sync else frozenset()
         _KEYFRAME_CACHE[ep_dir] = keyframes
 
-    if keyframes:
+    # OpenPI's pinned Torch 2.7 uses TorchCodec 0.3, which predates custom
+    # mappings. Keep normal indexed decoding available in that environment.
+    if keyframes and "custom_frame_mappings" in inspect.signature(VideoDecoder).parameters:
         frames = [
             {"pts": 512 * i, "duration": 512, "key_frame": 1 if i in keyframes else 0}
             for i in range(episode_length)
