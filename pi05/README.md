@@ -51,19 +51,19 @@ source .venv/bin/activate
 export ROBOT_PROFILE=yam_infra
 
 python -m pi05.run_yam \
-  --host cybertron5 \
+  --host cybertron5.csres.utexas.edu \
   --port 8000 \
   --prompt "put the cups into the box" \
   --chunks 1
 ```
 
-Use this exact prompt to match the retrained policy. Replace `cybertron5` with its reachable IP/hostname if needed; port 8000 must be accessible from the lab.
+Use this exact prompt to match the retrained policy. Port 8000 on `cybertron5.csres.utexas.edu` must be accessible from the lab.
 
 Once that succeeds, enable motion for a short trial:
 
 ```bash
 python -m pi05.run_yam \
-  --host cybertron5 \
+  --host cybertron5.csres.utexas.edu \
   --port 8000 \
   --prompt "put the cups into the box" \
   --execute \
