@@ -1,6 +1,9 @@
 # π0.5 rollout
 
 Run in three terminals: one on the GPU server and two on the lab workstation.
+This tests `pick_and_place_cups_into_box_lora`, trained with the instruction
+`put the cups into the box`. Step `29999` is the final checkpoint of the
+30,000-step run; use it after training has finished saving.
 
 ## 1. GPU server: load and warm up the policy
 
@@ -16,8 +19,8 @@ export EPISODE=/data2/zhuorui/yam_infra/data/exports/pick_and_place/train/261013
 
 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
 "$PY" -m pi05.serve \
-  --checkpoint "$CKPT_ROOT/pick_and_place_lora/$STEP" \
-  --recipe "$CKPT_ROOT/pick_and_place_lora.recipe.json" \
+  --checkpoint "$CKPT_ROOT/pick_and_place_cups_into_box_lora/$STEP" \
+  --recipe "$CKPT_ROOT/pick_and_place_cups_into_box_lora.recipe.json" \
   --warmup-episode "$EPISODE" \
   --port 8000
 ```
@@ -50,11 +53,11 @@ export ROBOT_PROFILE=yam_infra
 python -m pi05.run_yam \
   --host cybertron5 \
   --port 8000 \
-  --prompt "pick and place" \
+  --prompt "put the cups into the box" \
   --chunks 1
 ```
 
-Use the task instruction from your demonstrations. Replace `cybertron5` with its reachable IP/hostname if needed; port 8000 must be accessible from the lab.
+Use this exact prompt to match the retrained policy. Replace `cybertron5` with its reachable IP/hostname if needed; port 8000 must be accessible from the lab.
 
 Once that succeeds, enable motion for a short trial:
 
@@ -62,7 +65,7 @@ Once that succeeds, enable motion for a short trial:
 python -m pi05.run_yam \
   --host cybertron5 \
   --port 8000 \
-  --prompt "pick and place" \
+  --prompt "put the cups into the box" \
   --execute \
   --chunks 3 \
   --execute-steps 10
