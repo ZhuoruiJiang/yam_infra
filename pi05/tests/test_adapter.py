@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-from pi05.dataset import ABCDataset, rgb_bytes
+from pi05.dataset import ABCDataset, rgb_bytes, episode_pattern
 from pi05.transforms import YAMInputs
 from pi05.run_yam import checked_action
 
@@ -78,6 +78,22 @@ class AdapterTests(unittest.TestCase):
         from pi05.train import parser
         arguments = parser().parse_args(["--data-root", str(self.root), "--openpi-dir", str(self.root), "--smoke-test"])
         self.assertTrue(arguments.smoke_test)
+
+    def test_data_tag_overrides_smoke_default_and_selects_episodes(self):
+        (self.root / "one").rename(self.root / "example-pick_cup-001")
+        ds = ABCDataset(self.root, episode_glob=episode_pattern("pick_cup", smoke_test=True), decode=False)
+        self.assertEqual(len(ds.episodes), 1)
+        self.assertEqual(ds.episodes[0][0].name, "example-pick_cup-001")
+        self.assertEqual(episode_pattern(None, True), "*depth_test*")
+        self.assertEqual(episode_pattern(), "*")
+
+    def test_data_tag_is_literal_and_not_a_path(self):
+        (self.root / "one").rename(self.root / "example-task[1]-001")
+        ds = ABCDataset(self.root, episode_glob=episode_pattern("task[1]"), decode=False)
+        self.assertEqual(len(ds.episodes), 1)
+        for invalid in ("", " ", "../train", "train\\episode"):
+            with self.assertRaises(ValueError):
+                episode_pattern(invalid)
 
     def test_processed_dataset_and_normalization_are_bypassed(self):
         images = {key: np.ones((3, 8, 9), dtype=np.float32) * i / 2

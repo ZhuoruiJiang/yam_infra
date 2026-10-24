@@ -1,6 +1,7 @@
 """Read ABC exports without constructing ABC's processed EpisodeDataset."""
 import json
 import hashlib
+import glob
 from bisect import bisect_right
 from pathlib import Path
 
@@ -8,6 +9,15 @@ import numpy as np
 
 CAMERAS = ("top", "left", "right")
 DIM = 14
+
+
+def episode_pattern(data_tag=None, smoke_test=False):
+    """Match a literal tag in exported episode directory names."""
+    if data_tag is None:
+        return "*depth_test*" if smoke_test else "*"
+    if not data_tag.strip() or "/" in data_tag or "\\" in data_tag:
+        raise ValueError("data-tag must be a nonempty episode-name tag, without path separators")
+    return f"*{glob.escape(data_tag)}*"
 
 
 def rgb_bytes(image):

@@ -11,6 +11,7 @@ from pathlib import Path
 def parser():
     p = argparse.ArgumentParser()
     p.add_argument("--data-root", required=True, type=Path, help="Export root containing train/")
+    p.add_argument("--data-tag", help="Select episode directories containing this literal tag; defaults to depth_test for smoke tests, otherwise all episodes")
     p.add_argument("--mode", choices=["full", "lora"], default="lora")
     p.add_argument("--horizon", type=int, default=50)
     p.add_argument("--assets", help="Defaults to pi05/assets (pi05/smoke_assets for smoke tests)")
@@ -22,7 +23,7 @@ def parser():
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--save-interval", type=int, default=1000)
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--smoke-test", action="store_true", help="Use only exported *depth_test* fixtures, not actual training demonstrations")
+    p.add_argument("--smoke-test", action="store_true", help="Short test run with separate outputs; defaults to depth_test unless --data-tag is supplied")
     p.add_argument("--prompt", help="Override every episode instruction (single-task data only)")
     p.add_argument("--openpi-dir", type=Path, required=True, help="OpenPI checkout containing scripts/train.py")
     return p
@@ -37,13 +38,13 @@ def main():
         raise ValueError("Counts must be positive; workers must be nonnegative")
     if not (args.openpi_dir / "scripts" / "train.py").is_file():
         raise FileNotFoundError(args.openpi_dir / "scripts" / "train.py")
-    from pi05.dataset import ABCDataset
-    episode_glob = "*depth_test*" if args.smoke_test else "*"
+    from pi05.dataset import ABCDataset, episode_pattern
+    episode_glob = episode_pattern(args.data_tag, args.smoke_test)
     dataset = ABCDataset(args.data_root / "train", args.horizon, args.prompt,
                          episode_glob=episode_glob, decode=False)
     if not args.smoke_test:
         dataset.require_training_data()
-    print(f"Selected {len(dataset.episodes)} episodes / {len(dataset)} frames; smoke_test={args.smoke_test}")
+    print(f"Selected {len(dataset.episodes)} episodes / {len(dataset)} frames; pattern={episode_glob!r}; smoke_test={args.smoke_test}")
     import openpi.training.data_loader as dl
     from pi05.training_config import make_config
     config = make_config(args.mode, args.horizon, args.assets, args.checkpoints, args.exp_name,
