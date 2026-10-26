@@ -18,7 +18,7 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--host", required=True)
+    p.add_argument("--host", default="127.0.0.1", help="Policy server; defaults to inference on this lab computer")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--prompt", required=True)
     p.add_argument("--execute", action="store_true")
