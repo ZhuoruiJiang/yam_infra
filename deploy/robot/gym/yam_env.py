@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 from typing import Any
 
 import gymnasium as gym
@@ -24,11 +25,13 @@ class YAMEnv(gym.Env):
         prompt: str = "fold the towel",
         action_resync_max_retries: int = 2,
         execute_actions: bool = True,
+        require_action_ack: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
         self.prompt = prompt
         self.execute_actions = execute_actions
+        self.require_action_ack = require_action_ack
         # PUB/SUB can silently drop the single publish in step(); on
         # follower-state timeout we re-publish and retry get_obs this many
         # times before re-raising (default ~1s worst case at 500ms timeout).
@@ -99,40 +102,76 @@ class YAMEnv(gym.Env):
                 for name in self.robot_names
             }
 
-    def _publish_action(self, action: np.ndarray) -> None:
+    def _publish_action(self, action: np.ndarray, action_id: str | None = None,
+                        robot_names: set[str] | None = None) -> None:
         if not self.execute_actions:
             return
         for i, name in enumerate(self.robot_names):
+            if robot_names is not None and name not in robot_names:
+                continue
             robot_action = action[i * 7 : (i + 1) * 7]
-            comms.publish(self.robot_action_sockets[name], robot_action)
+            extras = {"action_id": action_id} if action_id is not None else None
+            comms.publish(self.robot_action_sockets[name], robot_action, extras)
 
-    def _get_state_after_action(self, action: np.ndarray) -> np.ndarray:
+    def _receive_command_state(self, name: str, action_id: str | None, timeout_ms: int):
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise comms.SubscribeTimeout(f"no matching command acknowledgement from follower:{name}")
+            state, extras = comms.subscribe(
+                self.robot_state_sockets[name], timeout_ms=max(1, remaining_ms),
+                topic_label=f"follower_state:{name}",
+            )
+            # Boot broadcasts and replies to older commands cannot acknowledge
+            # this target. Old publishers still work when action_id is None.
+            if action_id is None or extras.get("action_id") == action_id:
+                return state
+
+    def _get_state_after_action(self, action: np.ndarray, action_id: str | None = None,
+                                timeout_ms: int = _FOLLOWER_STATE_RECV_TIMEOUT_MS) -> np.ndarray:
+        if not self.execute_actions:
+            return self.get_init_q()
+        states = {}
         for attempt in range(self._action_resync_max_retries + 1):
-            try:
-                return self._get_state_obs()
-            except comms.SubscribeTimeout as error:
-                if attempt >= self._action_resync_max_retries:
-                    raise
-                print(
-                    f"[YAMEnv] follower state recv timed out ({error}); "
-                    "re-publishing action "
-                    f"(retry {attempt + 1}/{self._action_resync_max_retries})",
-                    flush=True,
-                )
-                self._publish_action(action)
+            last_error = None
+            for name in self.robot_names:
+                if name in states:
+                    continue
+                try:
+                    states[name] = self._receive_command_state(name, action_id, timeout_ms)
+                except comms.SubscribeTimeout as error:
+                    last_error = error
+            if len(states) == len(self.robot_names):
+                return np.concatenate([states[name] for name in self.robot_names])
+            missing = set(self.robot_names) - states.keys()
+            if attempt >= self._action_resync_max_retries:
+                raise comms.SubscribeTimeout(
+                    f"No command reply from {', '.join(sorted(missing))}; inspect the hardware terminal. "
+                    "With require_action_ack=True, restart hardware using the updated follower code."
+                ) from last_error
+            print(
+                f"[YAMEnv] waiting for {', '.join(sorted(missing))}; "
+                f"re-publishing only unacknowledged targets (retry {attempt + 1}/{self._action_resync_max_retries})",
+                flush=True,
+            )
+            # Preserve already received replies; don't execute those arms again.
+            self._publish_action(action, action_id, robot_names=missing)
 
-    def step_state(self, action: np.ndarray) -> np.ndarray:
+    def step_state(self, action: np.ndarray, *, timeout_ms: int = _FOLLOWER_STATE_RECV_TIMEOUT_MS) -> np.ndarray:
         """Execute one control action without waiting for camera frames."""
-        self._publish_action(action)
-        return self._get_state_after_action(action)
+        action_id = uuid.uuid4().hex if self.require_action_ack else None
+        self._publish_action(action, action_id)
+        return self._get_state_after_action(action, action_id, timeout_ms)
 
     def step(self, action: np.ndarray):
-        self._publish_action(action)
+        action_id = uuid.uuid4().hex if self.require_action_ack else None
+        self._publish_action(action, action_id)
         # Cameras are read once: a camera stall is not recoverable by
         # re-publishing actions. The follower-state leg is.
         image_obs, mask_obs, camera_timestamps = self._get_camera_obs()
 
-        state_obs = self._get_state_after_action(action)
+        state_obs = self._get_state_after_action(action, action_id)
 
         obs = {
             "images": image_obs,

@@ -89,6 +89,11 @@ python -m pi05.hardware --followers
 
 This enables follower motors and calibration. Keep teleop leaders and other
 rollout processes stopped.
+After updating the code, restart this hardware process as well as the rollout
+client: both must use the new command-acknowledgement protocol. An executed
+rollout prints `Both followers acknowledged startup hold` only after both
+arms finish processing the startup hold. Restart the hardware process before
+a fresh trial following an executed run or follower-state timeout.
 
 ## 5. Lab terminal 3: test predictions, then enable motion
 

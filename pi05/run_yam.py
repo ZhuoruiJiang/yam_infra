@@ -46,7 +46,7 @@ def main():
     packer = msgpack_numpy.Packer()
     # Even commands-disabled mode subscribes to real states. YAMEnv's default
     # execute_actions=False substitutes init_q; do not use that substitution.
-    env = YAMEnv(cfg, prompt=a.prompt, execute_actions=False)
+    env = YAMEnv(cfg, prompt=a.prompt, execute_actions=False, require_action_ack=True)
     env.robot_state_sockets = {name: comms.create_subscriber(env._zmq_context,
                               f"follower_{name}_state", conflate=1) for name in cfg.robots}
     if a.execute:
@@ -71,8 +71,11 @@ def main():
             # Followers' first command is always interpolated for two seconds.
             # Release that boot handshake with a hold at the measured pose.
             time.sleep(0.3)
-            env._publish_action(checked_action(state, state, a.max_joint_step, a.max_gripper_step))
-            state = state_read(timeout_ms=5000)
+            state = env.step_state(
+                checked_action(state, state, a.max_joint_step, a.max_gripper_step),
+                timeout_ms=5000,
+            )
+            print("Both followers acknowledged startup hold", flush=True)
         for chunk in range(a.chunks):
             if not a.execute and chunk:
                 state = state_read()

@@ -186,6 +186,13 @@ class YAMFollowerNode(Node):
         "flexible_4310": "FLEXIBLE_4310",
     }
 
+    def _publish_command_state(self, command_extras: dict) -> None:
+        # Reply only after process_command returns, including boot interpolation.
+        # Other clients may continue to omit action_id.
+        action_id = command_extras.get("action_id")
+        extras = {"action_id": action_id} if action_id is not None else {}
+        self.publish(self.state_topic_name, self.get_joint_pos(), extras)
+
     def initial_bootup(self) -> None:
         _patch_gripper_calibration()
         from i2rt.robots.get_robot import get_yam_robot
@@ -212,10 +219,7 @@ class YAMFollowerNode(Node):
         command, extras = message
         extras["type"] = "interp"
         self.process_command(command, extras)
-        self.publish(
-            self.state_topic_name,
-            self.get_joint_pos(),
-        )
+        self._publish_command_state(extras)
 
         kp_scale = np.asarray(json.loads(os.environ.get("DEPLOY_KP_SCALE") or "1.0"))
         self.robot.update_kp_kd(default_kp * kp_scale, default_kd)
@@ -223,7 +227,7 @@ class YAMFollowerNode(Node):
     def tick(self) -> None:
         command, extras = self.subscribe(self.leader_topic_name)
         self.process_command(command, extras)
-        self.publish(self.state_topic_name, self.get_joint_pos())
+        self._publish_command_state(extras)
         self.publish(
             self.robot_obs_topic_name,
             np.concatenate([self.get_robot_obs(), command]),
