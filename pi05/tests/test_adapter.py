@@ -138,6 +138,17 @@ class AdapterTests(unittest.TestCase):
         command[0], command[6] = 0.05, 0.1
         np.testing.assert_array_equal(checked_action(command, np.zeros(14), 0.1, 0.2), command)
 
+    def test_motion_error_identifies_arm_joint_and_gripper_values(self):
+        state = np.zeros(14)
+        action = state.copy()
+        action[7] = 0.25
+        action[6] = 0.5
+        with self.assertRaises(RuntimeError) as caught:
+            checked_action(action, state, 0.1, 0.2)
+        message = str(caught.exception)
+        self.assertIn("right_joint1: state=0.0000, target=0.2500, delta=+0.2500, limit=0.1000 rad", message)
+        self.assertIn("left_gripper: state=0.0000, target=0.5000, delta=+0.5000, limit=0.2000 normalized", message)
+
 
 @unittest.skipUnless(importlib.util.find_spec("openpi"), "Run OpenPI checks in the server environment")
 class OpenPIConfigTests(unittest.TestCase):

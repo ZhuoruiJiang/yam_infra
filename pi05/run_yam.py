@@ -9,8 +9,18 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
     if action.shape != (14,) or state.shape != (14,) or not np.isfinite(action).all() or not np.isfinite(state).all():
         raise ValueError("Invalid action/state: expected 14 finite values")
     limit = np.array([max_joint_step] * 6 + [max_gripper_step] + [max_joint_step] * 6 + [max_gripper_step])
-    if np.any(np.abs(action - state) > limit):
-        raise RuntimeError("Target exceeds per-step motion limit; stopping without sending it")
+    difference = action - state
+    violations = np.flatnonzero(np.abs(difference) > limit)
+    if len(violations):
+        details = []
+        for index in violations:
+            side = "left" if index < 7 else "right"
+            joint = index % 7
+            name = f"{side}_gripper" if joint == 6 else f"{side}_joint{joint + 1}"
+            unit = "normalized" if joint == 6 else "rad"
+            details.append(f"{name}: state={state[index]:.4f}, target={action[index]:.4f}, "
+                           f"delta={difference[index]:+.4f}, limit={limit[index]:.4f} {unit}")
+        raise RuntimeError("Target exceeds per-step motion limit; stopping without sending it. " + "; ".join(details))
     if np.any(action[[6, 13]] < 0) or np.any(action[[6, 13]] > 1):
         raise RuntimeError("Gripper target outside [0, 1]")
     return action.astype(np.float32)
@@ -97,10 +107,18 @@ def main():
                 raise ValueError("Invalid action chunk")
             print(f"Chunk {chunk + 1}: {actions.shape}; execute={a.execute}")
             if not a.execute:
+                # Report a first-target mismatch even when no commands are sent.
+                try:
+                    checked_action(actions[0], state, a.max_joint_step, a.max_gripper_step)
+                except RuntimeError as error:
+                    print(f"First predicted action check: {error}", flush=True)
                 continue
             deadline = time.monotonic()
-            for action in actions[:a.execute_steps]:
-                command = checked_action(action, state, a.max_joint_step, a.max_gripper_step)
+            for action_index, action in enumerate(actions[:a.execute_steps], start=1):
+                try:
+                    command = checked_action(action, state, a.max_joint_step, a.max_gripper_step)
+                except RuntimeError as error:
+                    raise RuntimeError(f"Chunk {chunk + 1}, action {action_index}: {error}") from error
                 state = env.step_state(command)
                 deadline += 1 / 30
                 time.sleep(max(0, deadline - time.monotonic()))
