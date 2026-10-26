@@ -186,10 +186,15 @@ class YAMFollowerNode(Node):
         "flexible_4310": "FLEXIBLE_4310",
     }
 
-    def _publish_command_state(self, command_extras: dict) -> None:
+    def _publish_command_state(self, command_extras: dict | None = None) -> None:
         # Reply only after process_command returns, including boot interpolation.
         # Other clients may continue to omit action_id.
-        action_id = command_extras.get("action_id")
+        if command_extras is not None:
+            self._last_action_id = command_extras.get("action_id")
+        # Retain the last completed command ID on heartbeats. Otherwise an
+        # idle heartbeat could overwrite its one-shot acknowledgement in a
+        # conflated subscriber before the client has read it.
+        action_id = getattr(self, "_last_action_id", None)
         extras = {"action_id": action_id} if action_id is not None else {}
         self.publish(self.state_topic_name, self.get_joint_pos(), extras)
 
@@ -225,7 +230,13 @@ class YAMFollowerNode(Node):
         self.robot.update_kp_kd(default_kp * kp_scale, default_kd)
 
     def tick(self) -> None:
-        command, extras = self.subscribe(self.leader_topic_name)
+        command, extras = self.subscribe(self.leader_topic_name, block=False)
+        if command is None:
+            # Keep measured state available between rollouts. A reconnecting
+            # client reads state before creating its first hold command.
+            # Heartbeats do not repeat or synthesize motor commands.
+            self._publish_command_state()
+            return
         self.process_command(command, extras)
         self._publish_command_state(extras)
         self.publish(

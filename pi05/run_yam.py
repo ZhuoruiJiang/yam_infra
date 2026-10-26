@@ -26,6 +26,17 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
     return action.astype(np.float32)
 
 
+def motion_metrics(start_state, targets, measured_states):
+    """Peak excursions during a chunk, including motion that returns to start."""
+    target_delta = np.max(np.abs(np.asarray(targets) - start_state), axis=0)
+    measured_delta = np.max(np.abs(np.asarray(measured_states) - start_state), axis=0)
+    return {side: {"target_joints": float(target_delta[offset:offset + 6].max()),
+                   "measured_joints": float(measured_delta[offset:offset + 6].max()),
+                   "target_gripper": float(target_delta[offset + 6]),
+                   "measured_gripper": float(measured_delta[offset + 6])}
+            for side, offset in (("left", 0), ("right", 7))}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1", help="Policy server; defaults to inference on this lab computer")
@@ -76,6 +87,7 @@ def main():
         metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         if metadata.get("robot") != "yam" or metadata.get("action_dim") != 14 or metadata.get("fps") != 30:
             raise ValueError("Server is not a compatible YAM pi0.5 policy")
+        print("Waiting for measured states from both followers...", flush=True)
         state = state_read(timeout_ms=60000)
         if a.execute:
             # Followers' first command is always interpolated for two seconds.
@@ -114,14 +126,23 @@ def main():
                     print(f"First predicted action check: {error}", flush=True)
                 continue
             deadline = time.monotonic()
+            chunk_start = state.copy()
+            targets, measured_states = [], []
             for action_index, action in enumerate(actions[:a.execute_steps], start=1):
                 try:
                     command = checked_action(action, state, a.max_joint_step, a.max_gripper_step)
                 except RuntimeError as error:
                     raise RuntimeError(f"Chunk {chunk + 1}, action {action_index}: {error}") from error
                 state = env.step_state(command)
+                targets.append(command.copy())
+                measured_states.append(state.copy())
                 deadline += 1 / 30
                 time.sleep(max(0, deadline - time.monotonic()))
+            for side, values in motion_metrics(chunk_start, targets, measured_states).items():
+                print(f"  {side}: peak target/measured joint change "
+                      f"{values['target_joints']:.4f}/{values['measured_joints']:.4f} rad; "
+                      f"gripper change {values['target_gripper']:.4f}/{values['measured_gripper']:.4f}",
+                      flush=True)
     finally:
         # No automatic home move on exit. Existing follower node maintains
         # its last target; the lab's hardware stop remains operator controlled.

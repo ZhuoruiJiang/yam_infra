@@ -116,6 +116,34 @@ class FollowerHandshakeTests(unittest.TestCase):
         node._publish_command_state({})
         self.assertEqual(node.publish.call_args.args[2], {})
 
+    def test_idle_heartbeat_retains_last_completed_command_acknowledgement(self):
+        node = follower_module.YAMFollowerNode.__new__(follower_module.YAMFollowerNode)
+        node.leader_topic_name = "commands"
+        node.state_topic_name = "states"
+        node.subscribe = Mock(return_value=(None, {}))
+        node.get_joint_pos = Mock(return_value=np.ones(7))
+        node.publish = Mock()
+        node._publish_command_state({"action_id": "completed"})
+        node.tick()
+        self.assertEqual(node.publish.call_args.args[2], {"action_id": "completed"})
+
+    def test_idle_follower_publishes_fresh_state_without_commanding_motion(self):
+        node = follower_module.YAMFollowerNode.__new__(follower_module.YAMFollowerNode)
+        node.leader_topic_name = "commands"
+        node.state_topic_name = "states"
+        node.subscribe = Mock(return_value=(None, {}))
+        node.process_command = Mock()
+        node.get_joint_pos = Mock(side_effect=[np.ones(7), np.full(7, 2)])
+        node.publish = Mock()
+        node.tick()
+        node.tick()
+        node.process_command.assert_not_called()
+        node.subscribe.assert_called_with("commands", block=False)
+        self.assertEqual(len(node.publish.call_args_list), 2)
+        np.testing.assert_array_equal(node.publish.call_args_list[0].args[1], np.ones(7))
+        np.testing.assert_array_equal(node.publish.call_args_list[1].args[1], np.full(7, 2))
+        self.assertEqual(node.publish.call_args.args[2], {})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -92,8 +92,9 @@ rollout processes stopped.
 After updating the code, restart this hardware process as well as the rollout
 client: both must use the new command-acknowledgement protocol. An executed
 rollout prints `Both followers acknowledged startup hold` only after both
-arms finish processing the startup hold. Restart the hardware process before
-a fresh trial following an executed run or follower-state timeout.
+arms finish processing the startup hold. Updated followers publish measured
+state while idle, so the rollout client can reconnect for another trial
+without restarting the hardware process each time.
 
 ## 5. Lab terminal 3: test predictions, then enable motion
 
@@ -128,3 +129,8 @@ python -m pi05.run_yam \
 This executes 10 predicted targets per chunk at 30 Hz, then obtains a fresh
 observation and replans. Keep the physical stop available; Ctrl+C stops
 client commands but leaves followers holding their last target.
+Each completed chunk prints peak target/measured joint and gripper changes
+from the chunk's initial state. Small target changes indicate near-hold
+predictions; sizeable target changes with very small measured changes need
+driver/motor investigation. These three chunks cover only about one second
+of commanded time, plus startup and inference.

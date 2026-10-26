@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 from pi05.dataset import ABCDataset, rgb_bytes, episode_pattern
 from pi05.transforms import YAMInputs
-from pi05.run_yam import checked_action
+from pi05.run_yam import checked_action, motion_metrics
 
 
 class AdapterTests(unittest.TestCase):
@@ -137,6 +137,19 @@ class AdapterTests(unittest.TestCase):
         command = np.zeros(14, dtype=np.float32)
         command[0], command[6] = 0.05, 0.1
         np.testing.assert_array_equal(checked_action(command, np.zeros(14), 0.1, 0.2), command)
+
+    def test_motion_metrics_distinguish_stationary_hardware_and_small_targets(self):
+        start = np.zeros(14)
+        targets = np.zeros((3, 14))
+        targets[0, 0], targets[1, 7], targets[1, 13] = 0.04, -0.03, 0.2
+        measured = np.zeros_like(targets)
+        measured[0, 0] = 0.01  # Moves and returns to zero; keep the peak.
+        metrics = motion_metrics(start, targets, measured)
+        self.assertAlmostEqual(metrics["left"]["target_joints"], 0.04)
+        self.assertAlmostEqual(metrics["left"]["measured_joints"], 0.01)
+        self.assertAlmostEqual(metrics["right"]["target_joints"], 0.03)
+        self.assertEqual(metrics["right"]["measured_joints"], 0)
+        self.assertAlmostEqual(metrics["right"]["target_gripper"], 0.2)
 
     def test_motion_error_identifies_arm_joint_and_gripper_values(self):
         state = np.zeros(14)
