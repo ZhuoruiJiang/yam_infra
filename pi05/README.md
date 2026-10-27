@@ -123,7 +123,9 @@ python -m pi05.run_yam \
   --prompt "put the cups into the box" \
   --execute \
   --chunks 3 \
-  --execute-steps 10
+  --execute-steps 10 \
+  --max-joint-step 0.15 \
+  --max-consecutive-rejections 3
 ```
 
 This executes 10 predicted targets per chunk at 30 Hz, then obtains a fresh
@@ -134,3 +136,13 @@ from the chunk's initial state. Small target changes indicate near-hold
 predictions; sizeable target changes with very small measured changes need
 driver/motor investigation. These three chunks cover only about one second
 of commanded time, plus startup and inference.
+
+The default joint target-to-measured gap is **0.15 rad** (previously 0.10);
+the gripper gap remains 0.2. These are position-gap checks, not speed limits.
+If an otherwise valid target exceeds a gap, it is not sent: the rest of that
+chunk is discarded while followers retain the last accepted targets. The
+next request uses fresh measured state and images. Three consecutive rejected
+chunks stop the rollout; a fully executed chunk resets that count. Invalid
+numbers, out-of-range grippers, stale observations and communication failures
+still stop immediately. `--chunks` counts prediction attempts, including
+rejected chunks. Use `--chunks 300` for a longer rollout.

@@ -1,13 +1,21 @@
 """Blocking action-chunk rollout; follower commands require --execute."""
 import argparse
+from dataclasses import dataclass, field
 import time
 import numpy as np
+
+
+class TargetGapExceeded(RuntimeError):
+    """A finite, in-range target is too far from the measured position."""
 
 
 def checked_action(action, state, max_joint_step, max_gripper_step):
     action, state = np.asarray(action), np.asarray(state)
     if action.shape != (14,) or state.shape != (14,) or not np.isfinite(action).all() or not np.isfinite(state).all():
         raise ValueError("Invalid action/state: expected 14 finite values")
+    # Range errors must remain fatal even when this target also exceeds a gap.
+    if np.any(action[[6, 13]] < 0) or np.any(action[[6, 13]] > 1):
+        raise RuntimeError("Gripper target outside [0, 1]")
     limit = np.array([max_joint_step] * 6 + [max_gripper_step] + [max_joint_step] * 6 + [max_gripper_step])
     difference = action - state
     violations = np.flatnonzero(np.abs(difference) > limit)
@@ -20,10 +28,51 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
             unit = "normalized" if joint == 6 else "rad"
             details.append(f"{name}: state={state[index]:.4f}, target={action[index]:.4f}, "
                            f"delta={difference[index]:+.4f}, limit={limit[index]:.4f} {unit}")
-        raise RuntimeError("Target exceeds per-step motion limit; stopping without sending it. " + "; ".join(details))
-    if np.any(action[[6, 13]] < 0) or np.any(action[[6, 13]] > 1):
-        raise RuntimeError("Gripper target outside [0, 1]")
+        raise TargetGapExceeded("Target exceeds measured-position gap limit; target not sent. " + "; ".join(details))
     return action.astype(np.float32)
+
+
+@dataclass
+class ChunkResult:
+    state: np.ndarray
+    targets: list = field(default_factory=list)
+    measurements: list = field(default_factory=list)
+    rejection: TargetGapExceeded | None = None
+    rejected_action: int | None = None
+
+
+@dataclass
+class RejectionBudget:
+    maximum: int = 3
+    consecutive: int = 0
+
+    def record(self, rejection):
+        self.consecutive = self.consecutive + 1 if rejection is not None else 0
+        if self.consecutive >= self.maximum:
+            raise RuntimeError(
+                f"Stopped after {self.consecutive} consecutive rejected chunks; "
+                "followers retain their last accepted targets."
+            ) from rejection
+
+
+def execute_chunk(env, actions, state, execute_steps, max_joint_step, max_gripper_step):
+    result = ChunkResult(state=np.asarray(state).copy())
+    deadline = time.monotonic()
+    for index, action in enumerate(actions[:execute_steps], start=1):
+        try:
+            command = checked_action(action, result.state, max_joint_step, max_gripper_step)
+        except TargetGapExceeded as error:
+            result.rejection, result.rejected_action = error, index
+            # The driver keeps the last accepted target. Do not send this
+            # target or skip ahead to a later point of the same trajectory.
+            return result
+        # Communication/driver failures are intentionally not recoverable here.
+        result.state = env.step_state(command)
+        result.targets.append(command.copy())
+        result.measurements.append(result.state.copy())
+        deadline += 1 / 30
+        time.sleep(max(0, deadline - time.monotonic()))
+    return result
 
 
 def motion_metrics(start_state, targets, measured_states):
@@ -47,11 +96,15 @@ def main():
     p.add_argument("--execute-steps", type=int, default=10)
     p.add_argument("--max-observation-age", type=float, default=0.5)
     p.add_argument("--max-inference-seconds", type=float, default=2.0)
-    p.add_argument("--max-joint-step", type=float, default=0.1)
-    p.add_argument("--max-gripper-step", type=float, default=0.2)
+    p.add_argument("--max-joint-step", type=float, default=0.15,
+                   help="Maximum target-to-measured joint gap in radians (not a speed limit)")
+    p.add_argument("--max-gripper-step", type=float, default=0.2,
+                   help="Maximum target-to-measured gripper gap")
+    p.add_argument("--max-consecutive-rejections", type=int, default=3,
+                   help="Stop after this many consecutive rejected chunks; completed chunks reset the count")
     a = p.parse_args()
     if min(a.chunks, a.execute_steps, a.max_observation_age, a.max_inference_seconds,
-           a.max_joint_step, a.max_gripper_step) <= 0:
+           a.max_joint_step, a.max_gripper_step, a.max_consecutive_rejections) <= 0:
         p.error("Counts, timeouts and motion limits must be positive")
     from deploy.robot import communication as comms
     from deploy.robot.config import get_i2rt_config
@@ -98,9 +151,11 @@ def main():
                 timeout_ms=5000,
             )
             print("Both followers acknowledged startup hold", flush=True)
+        recovery = RejectionBudget(a.max_consecutive_rejections)
         for chunk in range(a.chunks):
-            if not a.execute and chunk:
-                state = state_read()
+            # In particular, rejections re-enter here with fresh feedback
+            # and fresh images rather than retrying the rejected chunk.
+            state = state_read()
             obs = env.get_obs(state=state)
             now = time.perf_counter()
             if any(not 0 <= now - timestamp <= a.max_observation_age
@@ -125,24 +180,24 @@ def main():
                 except RuntimeError as error:
                     print(f"First predicted action check: {error}", flush=True)
                 continue
-            deadline = time.monotonic()
+            # Inference takes time; check against current feedback, not the
+            # state captured before the request while a previous target settles.
+            state = state_read()
             chunk_start = state.copy()
-            targets, measured_states = [], []
-            for action_index, action in enumerate(actions[:a.execute_steps], start=1):
-                try:
-                    command = checked_action(action, state, a.max_joint_step, a.max_gripper_step)
-                except RuntimeError as error:
-                    raise RuntimeError(f"Chunk {chunk + 1}, action {action_index}: {error}") from error
-                state = env.step_state(command)
-                targets.append(command.copy())
-                measured_states.append(state.copy())
-                deadline += 1 / 30
-                time.sleep(max(0, deadline - time.monotonic()))
-            for side, values in motion_metrics(chunk_start, targets, measured_states).items():
-                print(f"  {side}: peak target/measured joint change "
-                      f"{values['target_joints']:.4f}/{values['measured_joints']:.4f} rad; "
-                      f"gripper change {values['target_gripper']:.4f}/{values['measured_gripper']:.4f}",
-                      flush=True)
+            result = execute_chunk(env, actions, state, a.execute_steps, a.max_joint_step, a.max_gripper_step)
+            state = result.state
+            if result.targets:
+                for side, values in motion_metrics(chunk_start, result.targets, result.measurements).items():
+                    print(f"  {side}: peak target/measured joint change "
+                          f"{values['target_joints']:.4f}/{values['measured_joints']:.4f} rad; "
+                          f"gripper change {values['target_gripper']:.4f}/{values['measured_gripper']:.4f}",
+                          flush=True)
+            if result.rejection is not None:
+                print(f"Chunk {chunk + 1}, action {result.rejected_action}: {result.rejection}", flush=True)
+            recovery.record(result.rejection)
+            if result.rejection is not None:
+                print(f"Discarding remaining chunk; holding last accepted targets and replanning "
+                      f"({recovery.consecutive}/{recovery.maximum} consecutive rejections).", flush=True)
     finally:
         # No automatic home move on exit. Existing follower node maintains
         # its last target; the lab's hardware stop remains operator controlled.
