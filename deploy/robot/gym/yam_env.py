@@ -9,6 +9,7 @@ import zmq
 from gymnasium import spaces
 
 import deploy.robot.communication as comms
+from deploy.robot.poses import shutdown_pose
 
 # Max time to wait for a camera / follower-state message before raising.
 # Picked to be well above any legitimate transient (30Hz follower, 30fps cameras
@@ -103,15 +104,17 @@ class YAMEnv(gym.Env):
             }
 
     def _publish_action(self, action: np.ndarray, action_id: str | None = None,
-                        robot_names: set[str] | None = None) -> None:
+                        robot_names: set[str] | None = None, command_type: str = "servo") -> None:
         if not self.execute_actions:
             return
         for i, name in enumerate(self.robot_names):
             if robot_names is not None and name not in robot_names:
                 continue
             robot_action = action[i * 7 : (i + 1) * 7]
-            extras = {"action_id": action_id} if action_id is not None else None
-            comms.publish(self.robot_action_sockets[name], robot_action, extras)
+            extras = {"action_id": action_id} if action_id is not None else {}
+            if command_type != "servo":
+                extras["type"] = command_type
+            comms.publish(self.robot_action_sockets[name], robot_action, extras or None)
 
     def _receive_command_state(self, name: str, action_id: str | None, timeout_ms: int):
         deadline = time.monotonic() + timeout_ms / 1000
@@ -129,7 +132,8 @@ class YAMEnv(gym.Env):
                 return state
 
     def _get_state_after_action(self, action: np.ndarray, action_id: str | None = None,
-                                timeout_ms: int = _FOLLOWER_STATE_RECV_TIMEOUT_MS) -> np.ndarray:
+                                timeout_ms: int = _FOLLOWER_STATE_RECV_TIMEOUT_MS,
+                                command_type: str = "servo") -> np.ndarray:
         if not self.execute_actions:
             return self.get_init_q()
         states = {}
@@ -156,13 +160,24 @@ class YAMEnv(gym.Env):
                 flush=True,
             )
             # Preserve already received replies; don't execute those arms again.
-            self._publish_action(action, action_id, robot_names=missing)
+            self._publish_action(action, action_id, robot_names=missing, command_type=command_type)
 
     def step_state(self, action: np.ndarray, *, timeout_ms: int = _FOLLOWER_STATE_RECV_TIMEOUT_MS) -> np.ndarray:
         """Execute one control action without waiting for camera frames."""
         action_id = uuid.uuid4().hex if self.require_action_ack else None
         self._publish_action(action, action_id)
         return self._get_state_after_action(action, action_id, timeout_ms)
+
+    def move_to_shutdown_pose(self, state: np.ndarray, *, timeout_ms: int = 5000) -> np.ndarray:
+        """Use the hardware shutdown pose with the follower's two-second interpolation."""
+        if not self.execute_actions:
+            return np.asarray(state)
+        target = shutdown_pose(state)
+        if target.shape != (self.action_dim,):
+            raise ValueError(f"Reset expected {self.action_dim} state values, got {target.shape}")
+        action_id = uuid.uuid4().hex if self.require_action_ack else None
+        self._publish_action(target, action_id, command_type="interp")
+        return self._get_state_after_action(target, action_id, timeout_ms, command_type="interp")
 
     def step(self, action: np.ndarray):
         action_id = uuid.uuid4().hex if self.require_action_ack else None

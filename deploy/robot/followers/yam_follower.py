@@ -8,6 +8,7 @@ import tyro
 
 from deploy.robot.followers.yam_follower_config import YamFollowerConfig
 from deploy.robot.node import Node
+from deploy.robot.poses import shutdown_pose
 
 
 def _patch_gripper_calibration():
@@ -248,8 +249,7 @@ class YAMFollowerNode(Node):
         if not hasattr(self, "robot"):
             return
         try:
-            q_des = np.zeros(7)
-            q_des[6] = self.get_joint_pos()[-1]
+            q_des = shutdown_pose(self.get_joint_pos())
             try:
                 self.robot.move_joints(q_des, 2.0)
             except Exception:

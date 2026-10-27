@@ -45,6 +45,7 @@ class FollowerHandshakeTests(unittest.TestCase):
         env.execute_actions = True
         env.require_action_ack = ack
         env.robot_names = ["left", "right"]
+        env.action_dim = 14
         env.robot_state_sockets = {"left": "left", "right": "right"}
         env.robot_action_sockets = {"left": "left_actions", "right": "right_actions"}
         env._action_resync_max_retries = 2
@@ -98,6 +99,28 @@ class FollowerHandshakeTests(unittest.TestCase):
         env = self.make_env({"left": [self.response(1, None)],
                             "right": [self.response(2, None)]}, ack=False)
         np.testing.assert_array_equal(self.step(env), [1] * 7 + [2] * 7)
+
+    def test_reset_uses_interpolation_and_preserves_it_when_retrying(self):
+        env = self.make_env({"left": [self.response(1)],
+                            "right": [SubscribeTimeout("missed"), self.response(2)]})
+        state = np.ones(14)
+        state[6], state[13] = 0.2, 0.8
+        with patch.object(env_module.uuid, "uuid4", return_value=types.SimpleNamespace(hex="command")):
+            env.move_to_shutdown_pose(state)
+        calls = transport.publish.call_args_list
+        self.assertEqual([call.args[0] for call in calls], ["left_actions", "right_actions", "right_actions"])
+        for call in calls:
+            self.assertEqual(call.args[2], {"action_id": "command", "type": "interp"})
+            np.testing.assert_array_equal(call.args[1][:6], np.zeros(6))
+        self.assertAlmostEqual(float(calls[0].args[1][6]), 0.2)
+        self.assertAlmostEqual(float(calls[1].args[1][6]), 0.8)
+
+    def test_disabled_environment_does_not_publish_a_reset(self):
+        env = self.make_env({"left": [], "right": []})
+        env.execute_actions = False
+        state = np.ones(14)
+        np.testing.assert_array_equal(env.move_to_shutdown_pose(state), state)
+        transport.publish.assert_not_called()
 
     def test_follower_replies_after_processing_and_echoes_command_id(self):
         node = follower_module.YAMFollowerNode.__new__(follower_module.YAMFollowerNode)

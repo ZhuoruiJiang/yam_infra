@@ -129,13 +129,21 @@ python -m pi05.run_yam \
 ```
 
 This executes 10 predicted targets per chunk at 30 Hz, then obtains a fresh
-observation and replans. Keep the physical stop available; Ctrl+C stops
-client commands but leaves followers holding their last target.
+observation and replans. When an executed rollout finishes normally or you
+press **Ctrl+C**, both arms return smoothly over about two seconds to the
+same pose used when quitting `pi05.hardware`: **six zero joint angles per
+arm, with each gripper kept at its current measured position**. Follower
+motors remain enabled so another rollout can start. This is the shutdown
+pose defined by our driver, not the profile's placeholder `init_q` pose.
+Keep clearance for the return movement. Ctrl+C requests a reset; use the
+physical stop for an emergency. Commands-disabled runs do not reset, and
+runtime faults (including repeated rejected chunks) stop without initiating
+a separate reset movement.
 Each completed chunk prints peak target/measured joint and gripper changes
 from the chunk's initial state. Small target changes indicate near-hold
 predictions; sizeable target changes with very small measured changes need
 driver/motor investigation. These three chunks cover only about one second
-of commanded time, plus startup and inference.
+of commanded time, plus startup, inference and the final reset.
 
 The default joint target-to-measured gap is **15 degrees (about 0.262 rad)**;
 the gripper gap remains 0.2. These are position-gap checks, not speed limits.

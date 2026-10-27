@@ -88,6 +88,20 @@ def motion_metrics(start_state, targets, measured_states):
             for side, offset in (("left", 0), ("right", 7))}
 
 
+def close_rollout(env, ws, state_reader, reset=False):
+    try:
+        if reset:
+            print("Returning both arms to shutdown pose: zero joints, current grippers...", flush=True)
+            # Use current feedback, not a cached state from before the last action.
+            env.move_to_shutdown_pose(state_reader(), timeout_ms=5000)
+            print("Reset interpolation completed; follower motors remain enabled.", flush=True)
+    finally:
+        try:
+            env.close()
+        finally:
+            ws.close()
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1", help="Policy server; defaults to inference on this lab computer")
@@ -138,6 +152,8 @@ def main():
                 raise RuntimeError("Stale follower state")
             states.append(value)
         return np.concatenate(states)
+    startup_complete = False
+    reset_on_exit = False
     try:
         metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         if metadata.get("robot") != "yam" or metadata.get("action_dim") != 14 or metadata.get("fps") != 30:
@@ -152,6 +168,7 @@ def main():
                 checked_action(state, state, a.max_joint_step, a.max_gripper_step),
                 timeout_ms=5000,
             )
+            startup_complete = True
             print("Both followers acknowledged startup hold", flush=True)
         recovery = RejectionBudget(a.max_consecutive_rejections)
         for chunk in range(a.chunks):
@@ -200,11 +217,14 @@ def main():
             if result.rejection is not None:
                 print(f"Discarding remaining chunk; holding last accepted targets and replanning "
                       f"({recovery.consecutive}/{recovery.maximum} consecutive rejections).", flush=True)
+        reset_on_exit = a.execute and startup_complete
+    except KeyboardInterrupt:
+        print("Ctrl+C received; stopping policy rollout.", flush=True)
+        reset_on_exit = a.execute and startup_complete
     finally:
-        # No automatic home move on exit. Existing follower node maintains
-        # its last target; the lab's hardware stop remains operator controlled.
-        env.close()
-        ws.close()
+        # Runtime faults still stop without starting a separate movement.
+        # Normal completion / the first Ctrl+C returns to the shared shutdown pose.
+        close_rollout(env, ws, state_read, reset=reset_on_exit)
 
 
 if __name__ == "__main__":
