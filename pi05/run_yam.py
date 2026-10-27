@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import time
 import numpy as np
 
+DEFAULT_MAX_JOINT_GAP = float(np.deg2rad(15.0))
+
 
 class TargetGapExceeded(RuntimeError):
     """A finite, in-range target is too far from the measured position."""
@@ -96,8 +98,8 @@ def main():
     p.add_argument("--execute-steps", type=int, default=10)
     p.add_argument("--max-observation-age", type=float, default=0.5)
     p.add_argument("--max-inference-seconds", type=float, default=2.0)
-    p.add_argument("--max-joint-step", type=float, default=0.15,
-                   help="Maximum target-to-measured joint gap in radians (not a speed limit)")
+    p.add_argument("--max-joint-step", type=float, default=DEFAULT_MAX_JOINT_GAP,
+                   help="Maximum target-to-measured joint gap in radians (default: 15 degrees, about 0.262 rad; not a speed limit)")
     p.add_argument("--max-gripper-step", type=float, default=0.2,
                    help="Maximum target-to-measured gripper gap")
     p.add_argument("--max-consecutive-rejections", type=int, default=3,

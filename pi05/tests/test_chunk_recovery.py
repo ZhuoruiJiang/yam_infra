@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
-from pi05.run_yam import checked_action, execute_chunk, RejectionBudget, TargetGapExceeded
+from pi05.run_yam import checked_action, execute_chunk, RejectionBudget, TargetGapExceeded, DEFAULT_MAX_JOINT_GAP
 
 
 class ChunkRecoveryTests(unittest.TestCase):
@@ -16,7 +16,14 @@ class ChunkRecoveryTests(unittest.TestCase):
         self.env.step_state.return_value = self.state.copy()
 
     def execute(self, actions):
-        return execute_chunk(self.env, actions, self.state, len(actions), 0.15, 0.2)
+        return execute_chunk(self.env, actions, self.state, len(actions), DEFAULT_MAX_JOINT_GAP, 0.2)
+
+    def test_default_accepts_fourteen_degrees_and_rejects_sixteen(self):
+        target = self.state.copy()
+        target[0] = np.deg2rad(14)
+        self.assertIsNone(self.execute([target]).rejection)
+        target[0] = np.deg2rad(16)
+        self.assertIsInstance(self.execute([target]).rejection, TargetGapExceeded)
 
     def test_reported_gap_passes_relaxed_guard_without_clipping(self):
         target = self.state.copy()

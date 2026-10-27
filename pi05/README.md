@@ -124,7 +124,7 @@ python -m pi05.run_yam \
   --execute \
   --chunks 3 \
   --execute-steps 10 \
-  --max-joint-step 0.15 \
+  --max-joint-step 0.2617993877991494 \
   --max-consecutive-rejections 3
 ```
 
@@ -137,7 +137,7 @@ predictions; sizeable target changes with very small measured changes need
 driver/motor investigation. These three chunks cover only about one second
 of commanded time, plus startup and inference.
 
-The default joint target-to-measured gap is **0.15 rad** (previously 0.10);
+The default joint target-to-measured gap is **15 degrees (about 0.262 rad)**;
 the gripper gap remains 0.2. These are position-gap checks, not speed limits.
 If an otherwise valid target exceeds a gap, it is not sent: the rest of that
 chunk is discarded while followers retain the last accepted targets. The
