@@ -12,11 +12,15 @@ class TargetGapExceeded(RuntimeError):
     """A finite, in-range target is too far from the measured position."""
 
 
+class GripperRangeExceeded(RuntimeError):
+    """Skip this bimanual timestep instead of issuing an out-of-range target."""
+
+
 def checked_action(action, state, max_joint_step, max_gripper_step):
     action, state = np.asarray(action), np.asarray(state)
     if action.shape != (14,) or state.shape != (14,) or not np.isfinite(action).all() or not np.isfinite(state).all():
         raise ValueError("Invalid action/state: expected 14 finite values")
-    # Range errors must remain fatal even when this target also exceeds a gap.
+    # Check range before gap so finite gripper overshoots can be skipped.
     bad_grippers = [index for index in (6, 13) if action[index] < 0 or action[index] > 1]
     if bad_grippers:
         details = "; ".join(
@@ -24,7 +28,7 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
             f"state={state[index]:.6f}, target={action[index]:.6f}, allowed=[0, 1]"
             for index in bad_grippers
         )
-        raise RuntimeError(f"Gripper target outside [0, 1]; target not sent. {details}")
+        raise GripperRangeExceeded(f"Gripper target outside [0, 1]; target not sent. {details}")
     limit = np.array([max_joint_step] * 6 + [max_gripper_step] + [max_joint_step] * 6 + [max_gripper_step])
     difference = action - state
     violations = np.flatnonzero(np.abs(difference) > limit)
@@ -48,6 +52,7 @@ class ChunkResult:
     measurements: list = field(default_factory=list)
     rejection: TargetGapExceeded | None = None
     rejected_action: int | None = None
+    skipped_actions: list = field(default_factory=list)
 
 
 @dataclass
@@ -64,12 +69,22 @@ class RejectionBudget:
             ) from rejection
 
 
-def execute_chunk(env, actions, state, execute_steps, max_joint_step, max_gripper_step):
+def execute_chunk(env, actions, state, execute_steps, max_joint_step, max_gripper_step, state_reader=None):
     result = ChunkResult(state=np.asarray(state).copy())
     deadline = time.monotonic()
     for index, action in enumerate(actions[:execute_steps], start=1):
         try:
             command = checked_action(action, result.state, max_joint_step, max_gripper_step)
+        except GripperRangeExceeded as error:
+            result.skipped_actions.append((index, str(error)))
+            # Skip both arms for this timestep, retaining their existing
+            # targets. Keep time advancing and refresh feedback before the
+            # next prediction in the chunk; don't clip the invalid value.
+            deadline += 1 / 30
+            time.sleep(max(0, deadline - time.monotonic()))
+            if state_reader is not None:
+                result.state = state_reader()
+            continue
         except TargetGapExceeded as error:
             result.rejection, result.rejected_action = error, index
             # The driver keeps the last accepted target. Do not send this
@@ -219,8 +234,11 @@ def main():
             # state captured before the request while a previous target settles.
             state = state_read()
             chunk_start = state.copy()
-            result = execute_chunk(env, actions, state, a.execute_steps, a.max_joint_step, a.max_gripper_step)
+            result = execute_chunk(env, actions, state, a.execute_steps, a.max_joint_step, a.max_gripper_step,
+                                   state_reader=state_read)
             state = result.state
+            for action_index, reason in result.skipped_actions:
+                print(f"Chunk {chunk + 1}, skipped action {action_index}: {reason}", flush=True)
             if result.targets:
                 for side, values in motion_metrics(chunk_start, result.targets, result.measurements).items():
                     print(f"  {side}: peak target/measured joint change "

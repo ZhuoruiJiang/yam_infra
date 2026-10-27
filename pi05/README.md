@@ -137,8 +137,8 @@ arm, with each gripper kept at its current measured position**. Follower
 motors remain enabled so another rollout can start. This is the shutdown
 pose defined by our driver, not the profile's placeholder `init_q` pose.
 Keep clearance for the return movement. Ctrl+C requests a reset; use the
-physical stop for an emergency. Runtime errors (including invalid gripper
-predictions or repeated rejected chunks) are raised after the reset attempt.
+physical stop for an emergency. Runtime errors (including repeated rejected
+chunks) are raised after the reset attempt.
 If feedback is unavailable or the reset fails, that failure is reported and
 the original error is preserved; physical return cannot then be guaranteed.
 Commands-disabled runs and failures before initial follower feedback do not reset.
@@ -153,7 +153,10 @@ the gripper gap remains 0.2. These are position-gap checks, not speed limits.
 If an otherwise valid target exceeds a gap, it is not sent: the rest of that
 chunk is discarded while followers retain the last accepted targets. The
 next request uses fresh measured state and images. Three consecutive rejected
-chunks stop the rollout; a fully executed chunk resets that count. Invalid
-numbers, out-of-range grippers, stale observations and communication failures
-still stop immediately. `--chunks` counts prediction attempts, including
+chunks stop the rollout; a chunk without a gap rejection resets that count.
+A finite gripper prediction outside [0,1] skips that whole bimanual action:
+no targets are sent for that timestep, previous targets remain held, and
+execution continues with the next action. Skips are logged; values are not
+clipped and do not trigger a reset. Invalid numbers, stale observations and
+communication failures still stop the rollout. `--chunks` counts prediction attempts, including
 rejected chunks. Use `--chunks 300` for a longer rollout.

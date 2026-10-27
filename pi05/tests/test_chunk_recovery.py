@@ -53,14 +53,37 @@ class ChunkRecoveryTests(unittest.TestCase):
         self.assertEqual(result.rejected_action, 1)
         self.assertEqual(result.targets, [])
 
-    def test_invalid_gripper_is_fatal_even_if_gap_also_exceeded(self):
+    def test_invalid_gripper_is_skipped_even_if_gap_also_exceeded(self):
         action = self.state.copy()
         action[6] = 1.2
-        with self.assertRaisesRegex(RuntimeError, "Gripper target outside") as caught:
-            self.execute([action])
-        self.assertNotIsInstance(caught.exception, TargetGapExceeded)
-        self.assertIn("left_gripper: state=0.000000, target=1.200000, allowed=[0, 1]", str(caught.exception))
+        result = self.execute([action])
+        self.assertIsNone(result.rejection)
+        self.assertEqual(result.skipped_actions[0][0], 1)
+        self.assertIn("left_gripper: state=0.000000, target=1.200000, allowed=[0, 1]", result.skipped_actions[0][1])
         self.env.step_state.assert_not_called()
+
+    def test_observed_gripper_overshoot_skips_whole_action_and_continues(self):
+        self.state[13] = 0.993493
+        self.env.step_state.return_value = self.state.copy()
+        actions = np.repeat(self.state[None], 3, axis=0)
+        actions[:, 0] = [0.01, 0.02, 0.03]
+        actions[1, 13] = 1.0016
+        result = self.execute(actions)
+        self.assertIsNone(result.rejection)
+        self.assertEqual([index for index, _ in result.skipped_actions], [2])
+        self.assertEqual(self.env.step_state.call_count, 2)
+        np.testing.assert_array_equal(self.env.step_state.call_args_list[0].args[0], actions[0])
+        np.testing.assert_array_equal(self.env.step_state.call_args_list[1].args[0], actions[2])
+
+    def test_all_skipped_actions_send_no_commands_and_refresh_feedback(self):
+        actions = np.zeros((3, 14), dtype=np.float32)
+        actions[:, 13] = 1.0016
+        reader = Mock(return_value=self.state.copy())
+        result = execute_chunk(self.env, actions, self.state, 3, DEFAULT_MAX_JOINT_GAP, 0.2, state_reader=reader)
+        self.assertEqual(len(result.skipped_actions), 3)
+        self.assertIsNone(result.rejection)
+        self.env.step_state.assert_not_called()
+        self.assertEqual(reader.call_count, 3)
 
     def test_nonfinite_prediction_is_fatal(self):
         action = self.state.copy()
