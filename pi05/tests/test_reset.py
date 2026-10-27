@@ -1,4 +1,4 @@
-"""Reset uses the existing shutdown pose and never runs for a dry run/fault."""
+"""Reset uses the shutdown pose on completion, interrupt, or runtime failure."""
 import unittest
 from unittest.mock import Mock
 
@@ -36,12 +36,48 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(env.move_to_shutdown_pose.call_args.kwargs, {"timeout_ms": 5000})
         self.assertEqual(order, ["reset", "env_closed", "ws_closed"])
 
-    def test_no_reset_for_commands_disabled_or_fault_exit(self):
+    def test_no_reset_for_commands_disabled_or_before_feedback_is_available(self):
         env, ws, read = Mock(), Mock(), Mock()
         close_rollout(env, ws, read, reset=False)
         read.assert_not_called()
         env.move_to_shutdown_pose.assert_not_called()
         env.close.assert_called_once()
+        ws.close.assert_called_once()
+
+    def test_runtime_error_resets_before_original_error_is_raised(self):
+        env, ws = Mock(), Mock()
+        original = RuntimeError("Gripper target outside [0, 1]")
+        order = []
+        env.move_to_shutdown_pose.side_effect = lambda *_a, **_k: order.append("reset")
+        with self.assertRaises(RuntimeError) as caught:
+            try:
+                raise original
+            finally:
+                close_rollout(env, ws, Mock(return_value=np.zeros(14)), reset=True, original_error=original)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(order, ["reset"])
+        env.close.assert_called_once()
+        ws.close.assert_called_once()
+
+    def test_failed_reset_preserves_original_rollout_error(self):
+        env, ws = Mock(), Mock()
+        env.move_to_shutdown_pose.side_effect = RuntimeError("follower unavailable")
+        original = ValueError("invalid model output")
+        with self.assertRaises(ValueError) as caught:
+            try:
+                raise original
+            finally:
+                close_rollout(env, ws, Mock(return_value=np.zeros(14)), reset=True, original_error=original)
+        self.assertIs(caught.exception, original)
+        env.close.assert_called_once()
+        ws.close.assert_called_once()
+
+    def test_cleanup_failure_does_not_hide_original_error_or_skip_socket_close(self):
+        env, ws = Mock(), Mock()
+        env.close.side_effect = RuntimeError("cleanup failed")
+        original = RuntimeError("invalid gripper")
+        close_rollout(env, ws, Mock(return_value=np.zeros(14)), reset=True, original_error=original)
+        env.move_to_shutdown_pose.assert_called_once()
         ws.close.assert_called_once()
 
     def test_missing_feedback_does_not_send_reset_and_still_cleans_up(self):

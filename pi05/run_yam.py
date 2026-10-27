@@ -2,6 +2,7 @@
 import argparse
 from dataclasses import dataclass, field
 import time
+import sys
 import numpy as np
 
 DEFAULT_MAX_JOINT_GAP = float(np.deg2rad(15.0))
@@ -94,18 +95,26 @@ def motion_metrics(start_state, targets, measured_states):
             for side, offset in (("left", 0), ("right", 7))}
 
 
-def close_rollout(env, ws, state_reader, reset=False):
+def close_rollout(env, ws, state_reader, reset=False, original_error=None):
+    failures = []
     try:
         if reset:
             print("Returning both arms to shutdown pose: zero joints, current grippers...", flush=True)
             # Use current feedback, not a cached state from before the last action.
             env.move_to_shutdown_pose(state_reader(), timeout_ms=5000)
             print("Reset interpolation completed; follower motors remain enabled.", flush=True)
+    except Exception as error:
+        failures.append(("Reset", error))
     finally:
-        try:
-            env.close()
-        finally:
-            ws.close()
+        for name, close in (("Robot connection cleanup", env.close), ("Policy connection cleanup", ws.close)):
+            try:
+                close()
+            except Exception as error:
+                failures.append((name, error))
+    for name, error in failures:
+        print(f"{name} failed: {error}", file=sys.stderr, flush=True)
+    if failures and original_error is None:
+        raise failures[0][1]
 
 
 def main():
@@ -158,14 +167,16 @@ def main():
                 raise RuntimeError("Stale follower state")
             states.append(value)
         return np.concatenate(states)
-    startup_complete = False
+    feedback_ready = False
     reset_on_exit = False
+    rollout_error = None
     try:
         metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         if metadata.get("robot") != "yam" or metadata.get("action_dim") != 14 or metadata.get("fps") != 30:
             raise ValueError("Server is not a compatible YAM pi0.5 policy")
         print("Waiting for measured states from both followers...", flush=True)
         state = state_read(timeout_ms=60000)
+        feedback_ready = True
         if a.execute:
             # Followers' first command is always interpolated for two seconds.
             # Release that boot handshake with a hold at the measured pose.
@@ -174,7 +185,6 @@ def main():
                 checked_action(state, state, a.max_joint_step, a.max_gripper_step),
                 timeout_ms=5000,
             )
-            startup_complete = True
             print("Both followers acknowledged startup hold", flush=True)
         recovery = RejectionBudget(a.max_consecutive_rejections)
         for chunk in range(a.chunks):
@@ -223,14 +233,20 @@ def main():
             if result.rejection is not None:
                 print(f"Discarding remaining chunk; holding last accepted targets and replanning "
                       f"({recovery.consecutive}/{recovery.maximum} consecutive rejections).", flush=True)
-        reset_on_exit = a.execute and startup_complete
+        reset_on_exit = a.execute and feedback_ready
     except KeyboardInterrupt:
         print("Ctrl+C received; stopping policy rollout.", flush=True)
-        reset_on_exit = a.execute and startup_complete
+        reset_on_exit = a.execute and feedback_ready
+    except Exception as error:
+        rollout_error = error
+        reset_on_exit = a.execute and feedback_ready
+        if reset_on_exit:
+            print(f"Rollout failed; attempting reset before raising: {error}", flush=True)
+        raise
     finally:
-        # Runtime faults still stop without starting a separate movement.
-        # Normal completion / the first Ctrl+C returns to the shared shutdown pose.
-        close_rollout(env, ws, state_read, reset=reset_on_exit)
+        # Reset before the original exception leaves this function. If feedback
+        # or reset fails, report it without masking the rollout failure.
+        close_rollout(env, ws, state_read, reset=reset_on_exit, original_error=rollout_error)
 
 
 if __name__ == "__main__":

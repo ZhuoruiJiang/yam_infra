@@ -129,16 +129,19 @@ python -m pi05.run_yam \
 ```
 
 This executes 10 predicted targets per chunk at 30 Hz, then obtains a fresh
-observation and replans. When an executed rollout finishes normally or you
-press **Ctrl+C**, both arms return smoothly over about two seconds to the
+observation and replans. When an executed rollout finishes normally, you
+press **Ctrl+C**, or a runtime error is raised, both arms are reset over
+about two seconds before exit to the
 same pose used when quitting `pi05.hardware`: **six zero joint angles per
 arm, with each gripper kept at its current measured position**. Follower
 motors remain enabled so another rollout can start. This is the shutdown
 pose defined by our driver, not the profile's placeholder `init_q` pose.
 Keep clearance for the return movement. Ctrl+C requests a reset; use the
-physical stop for an emergency. Commands-disabled runs do not reset, and
-runtime faults (including repeated rejected chunks) stop without initiating
-a separate reset movement.
+physical stop for an emergency. Runtime errors (including invalid gripper
+predictions or repeated rejected chunks) are raised after the reset attempt.
+If feedback is unavailable or the reset fails, that failure is reported and
+the original error is preserved; physical return cannot then be guaranteed.
+Commands-disabled runs and failures before initial follower feedback do not reset.
 Each completed chunk prints peak target/measured joint and gripper changes
 from the chunk's initial state. Small target changes indicate near-hold
 predictions; sizeable target changes with very small measured changes need
