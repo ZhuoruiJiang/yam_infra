@@ -16,8 +16,14 @@ def checked_action(action, state, max_joint_step, max_gripper_step):
     if action.shape != (14,) or state.shape != (14,) or not np.isfinite(action).all() or not np.isfinite(state).all():
         raise ValueError("Invalid action/state: expected 14 finite values")
     # Range errors must remain fatal even when this target also exceeds a gap.
-    if np.any(action[[6, 13]] < 0) or np.any(action[[6, 13]] > 1):
-        raise RuntimeError("Gripper target outside [0, 1]")
+    bad_grippers = [index for index in (6, 13) if action[index] < 0 or action[index] > 1]
+    if bad_grippers:
+        details = "; ".join(
+            f"{'left' if index == 6 else 'right'}_gripper: "
+            f"state={state[index]:.6f}, target={action[index]:.6f}, allowed=[0, 1]"
+            for index in bad_grippers
+        )
+        raise RuntimeError(f"Gripper target outside [0, 1]; target not sent. {details}")
     limit = np.array([max_joint_step] * 6 + [max_gripper_step] + [max_joint_step] * 6 + [max_gripper_step])
     difference = action - state
     violations = np.flatnonzero(np.abs(difference) > limit)

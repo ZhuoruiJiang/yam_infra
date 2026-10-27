@@ -59,6 +59,7 @@ class ChunkRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Gripper target outside") as caught:
             self.execute([action])
         self.assertNotIsInstance(caught.exception, TargetGapExceeded)
+        self.assertIn("left_gripper: state=0.000000, target=1.200000, allowed=[0, 1]", str(caught.exception))
         self.env.step_state.assert_not_called()
 
     def test_nonfinite_prediction_is_fatal(self):
